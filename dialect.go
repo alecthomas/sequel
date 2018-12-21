@@ -41,10 +41,6 @@ type dialect struct {
 
 // Expand a query and arguments using the Sequel recursive expansion rules.
 func (d *dialect) expand(query string, args []interface{}) (string, []interface{}, error) {
-	type replacement struct {
-		index     int
-		fragments []string
-	}
 	// Fragments of text making up the final statement.
 	w := &strings.Builder{}
 	out := []interface{}{}

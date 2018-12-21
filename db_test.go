@@ -15,12 +15,6 @@ type nested struct {
 	Email string
 }
 
-// A "user" but using nested structs.
-type nestedUser struct {
-	ID int
-	nested
-}
-
 type user struct {
 	ID    int
 	Name  *string

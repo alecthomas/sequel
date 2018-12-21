@@ -78,6 +78,11 @@ type Transaction struct {
 	queryable
 }
 
+// Commit transaction.
+func (t *Transaction) Commit() error {
+	return t.Tx.Commit()
+}
+
 // Rollback transaction.
 func (t *Transaction) Rollback() error {
 	return t.Tx.Rollback()
@@ -102,8 +107,7 @@ func (t *Transaction) Rollback() error {
 func (t *Transaction) CommitOrRollbackOnError(err *error) {
 	if *err == nil {
 		*err = t.Tx.Commit()
-	}
-	if rberr := t.Tx.Rollback(); rberr != nil {
+	} else if rberr := t.Tx.Rollback(); rberr != nil {
 		*err = rberr
 	}
 }
@@ -350,23 +354,4 @@ func fieldName(f reflect.StructField) string {
 		return tag
 	}
 	return strings.ToLower(f.Name)
-}
-
-func stringsEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, s := range a {
-		if b[i] != s {
-			return false
-		}
-	}
-	return true
-}
-
-func indirect(v reflect.Value) reflect.Value {
-	if v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
-		return indirect(v.Elem())
-	}
-	return v
 }
