@@ -87,28 +87,58 @@ func TestDBSelect(t *testing.T) {
 			db := databaseFixture(t)
 			defer db.Close()
 
-			// Insert fixture.
-			users := []struct {
-				Name  *string
-				Email string
-			}{
-				{str("Larry"), "larry@stooges.com"},
-				{nil, "moe@stooges.com"},
-				{str("Curly"), "curly@stooges.com"},
-			}
-			err := db.Exec(`INSERT INTO users (name, email) VALUES ?`, users)
-			require.NoError(t, err)
+			insertFixtures(t, db)
 
 			if test.dest == nil {
 				test.dest = &[]user{}
 			}
-			err = db.Select(test.dest, test.query, test.args...)
+			err := db.Select(test.dest, test.query, test.args...)
 			if test.err != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), test.err)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, test.dest)
+			}
+		})
+	}
+}
+
+func TestSelectOne(t *testing.T) {
+	db := databaseFixture(t)
+	defer db.Close()
+	insertFixtures(t, db)
+
+	type User struct {
+		Name  *string
+		Email string
+	}
+
+	tests := []struct {
+		name     string
+		sql      string
+		expected User
+		err      bool
+	}{
+		{name: "SingleRow",
+			sql:      `SELECT name, email FROM users WHERE name IS NULL`,
+			expected: User{Email: "moe@stooges.com"}},
+		{name: "MultipleRowsErrors",
+			sql: `SELECT name, email FROM users`,
+			err: true},
+		{name: "NoRowsErrors",
+			sql: `SELECT name, email FROM users WHERE email = "WOWOWOW"`,
+			err: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := User{}
+			err := db.SelectOne(&actual, test.sql)
+			if test.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -131,13 +161,12 @@ func TestCommitOrRollbackOnError(t *testing.T) {
 
 			tx, err := db.Begin()
 			require.NoError(t, err)
-			err = tx.Exec(
+			_, err = tx.Exec(
 				`INSERT INTO users (name, email) VALUES (?, ?)`,
 				"Larry", "larry@stooges.com")
 			require.NoError(t, err)
 
-			err = tx.CommitOrRollbackOnError(&test.err)
-			require.NoError(t, err)
+			tx.CommitOrRollbackOnError(&test.err)
 			count, err := db.SelectInt(`SELECT COUNT(*) FROM users`)
 			require.NoError(t, err)
 			require.Equal(t, test.count, count)
@@ -149,7 +178,7 @@ func databaseFixture(t *testing.T) *sequel.DB {
 	t.Helper()
 	db, err := sequel.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	err = db.Exec(`
+	_, err = db.Exec(`
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY,
 		name STRING,
@@ -161,3 +190,18 @@ func databaseFixture(t *testing.T) *sequel.DB {
 }
 
 func str(p string) *string { return &p }
+
+func insertFixtures(t *testing.T, db *sequel.DB) {
+	t.Helper()
+	// Insert fixture.
+	users := []struct {
+		Name  *string
+		Email string
+	}{
+		{str("Larry"), "larry@stooges.com"},
+		{nil, "moe@stooges.com"},
+		{str("Curly"), "curly@stooges.com"},
+	}
+	_, err := db.Exec(`INSERT INTO users (name, email) VALUES ?`, users)
+	require.NoError(t, err)
+}

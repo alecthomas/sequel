@@ -6,10 +6,13 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 var (
-	scannerType = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
+	scannerType   = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
+	timeType      = reflect.TypeOf(time.Time{})
+	byteSliceType = reflect.TypeOf([]byte{})
 
 	// Cache of row builders.
 	rowBuilderCache = map[reflect.Type]*builder{}
@@ -19,6 +22,7 @@ var (
 type builder struct {
 	fields []string
 	build  func(columns []string) (reflect.Value, []interface{})
+	fill   func(v interface{}, columns []string) []interface{}
 }
 
 // DB over an existing sql.DB.
@@ -95,11 +99,13 @@ func (t *Transaction) Rollback() error {
 //
 // 			return nil
 // 		}
-func (t *Transaction) CommitOrRollbackOnError(err *error) error {
+func (t *Transaction) CommitOrRollbackOnError(err *error) {
 	if *err == nil {
-		return t.Tx.Commit()
+		*err = t.Tx.Commit()
 	}
-	return t.Tx.Rollback()
+	if rberr := t.Tx.Rollback(); rberr != nil {
+		*err = rberr
+	}
 }
 
 // Operations common between sql.DB and sql.Tx.
@@ -122,48 +128,26 @@ func (q *queryable) Expand(query string, args ...interface{}) (string, []interfa
 }
 
 // Exec an SQL statement and ignore the result.
-func (q *queryable) Exec(query string, args ...interface{}) (err error) {
+func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err error) {
 	query, args, err = q.dialect.expand(query, args)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// TODO: Can we parse column names out of the statement, and reflect the same out of args, to be more type safe?
-	_, err = q.db.Exec(query, args...)
-	return err
+	return q.db.Exec(query, args...)
 }
 
 // Select issues a query, and accumulates the returned rows into slice.
 //
 // The shape and names of the query must match the shape and field names of the slice elements.
 func (q *queryable) Select(slice interface{}, query string, args ...interface{}) (err error) {
-	builder, err := q.makeRowBuilder(slice)
+	builder, err := q.makeRowBuilderForSlice(slice)
 	if err != nil {
 		return err
 	}
-	query, args, err = q.dialect.expand(query, args)
+	rows, columns, mapping, err := q.prepareSelect(builder, query, args...)
 	if err != nil {
 		return err
-	}
-	rows, err := q.db.Query(query, args...)
-	if err != nil {
-		return fmt.Errorf("%s; %q (mapping to fields %s)", err, query, strings.Join(builder.fields, ","))
-	}
-	columns, err := rows.Columns()
-	if err != nil {
-		return err
-	}
-	fieldMap := map[string]bool{}
-	for _, field := range builder.fields {
-		fieldMap[field] = true
-	}
-	for _, column := range columns {
-		if !fieldMap[column] {
-			return fmt.Errorf("no field (from %s) maps to result column %q", strings.Join(builder.fields, ","), column)
-		}
-	}
-	mapping := fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
-	if len(columns) != len(builder.fields) {
-		return fmt.Errorf("invalid mapping %s", mapping)
 	}
 	out := reflect.ValueOf(slice).Elem()
 	for rows.Next() {
@@ -176,6 +160,65 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 	}
 	reflect.ValueOf(slice).Elem().Set(out)
 	return nil
+}
+
+// SelectOne issues a query and selects a single row into ref.
+//
+// Will return sql.ErrNoRows if no rows are returned.
+func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}) error {
+	builder, err := q.makeRowBuilder(ref)
+	if err != nil {
+		return err
+	}
+	rows, columns, mapping, err := q.prepareSelect(builder, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return sql.ErrNoRows
+	}
+	values := builder.fill(ref, columns)
+	err = rows.Scan(values...)
+	if err != nil {
+		return fmt.Errorf("%s; %s", mapping, err)
+	}
+	if rows.Next() {
+		return fmt.Errorf("more than one row returned")
+	}
+	return nil
+}
+
+func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
+	query, args, err = q.dialect.expand(query, args)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	rows, err = q.db.Query(query, args...)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("%s; %q (mapping to fields %s)", err, query, strings.Join(builder.fields, ", "))
+	}
+	columns, err = rows.Columns()
+	if err != nil {
+		_ = rows.Close()
+		return nil, nil, "", err
+	}
+	fieldMap := map[string]bool{}
+	for _, field := range builder.fields {
+		fieldMap[field] = true
+	}
+	for _, column := range columns {
+		if !fieldMap[column] {
+			_ = rows.Close()
+			return nil, nil, "", fmt.Errorf("no field in (%s) maps to result column %q", strings.Join(builder.fields, ", "), column)
+		}
+	}
+	mapping = fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
+	if len(columns) != len(builder.fields) {
+		_ = rows.Close()
+		return nil, nil, "", fmt.Errorf("invalid mapping %s", mapping)
+	}
+	return rows, columns, mapping, nil
 }
 
 // SelectScalar selects a single column row into value.
@@ -199,18 +242,31 @@ func (q *queryable) SelectString(query string, args ...interface{}) (value strin
 }
 
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
-func (q *queryable) makeRowBuilder(slice interface{}) (*builder, error) {
+func (q *queryable) makeRowBuilder(v interface{}) (*builder, error) {
+	t := reflect.TypeOf(v)
+	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
+		return nil, fmt.Errorf("can only scan into pointer to struct, not %s", t)
+	}
+	return q.makeRowBuilderForType(t.Elem())
+}
+
+// Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
+func (q *queryable) makeRowBuilderForSlice(slice interface{}) (*builder, error) {
 	t := reflect.TypeOf(slice)
+	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Slice || t.Elem().Elem().Kind() != reflect.Struct {
+		return nil, fmt.Errorf("expected a pointer to a slice of structs but got %T", slice)
+	}
+	t = t.Elem().Elem()
+	return q.makeRowBuilderForType(t)
+}
+
+func (q *queryable) makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	rowBuilderLock.Lock()
 	defer rowBuilderLock.Unlock()
 	if builder, ok := rowBuilderCache[t]; ok {
 		return builder, nil
 	}
 
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Slice || t.Elem().Elem().Kind() != reflect.Struct {
-		return nil, fmt.Errorf("expected a pointer to a slice of structs but got %T", slice)
-	}
-	t = t.Elem().Elem()
 	fields, err := q.collectFieldIndexes(t)
 	if err != nil {
 		return nil, err
@@ -223,6 +279,14 @@ func (q *queryable) makeRowBuilder(slice interface{}) (*builder, error) {
 	}
 	return &builder{
 		fields: fieldNames,
+		fill: func(v interface{}, columns []string) (out []interface{}) {
+			rv := reflect.ValueOf(v).Elem()
+			out = make([]interface{}, len(fields))
+			for i, column := range columns {
+				out[i] = rv.FieldByIndex(fieldMap[column].index).Addr().Interface()
+			}
+			return
+		},
 		build: func(columns []string) (reflect.Value, []interface{}) {
 			out := make([]interface{}, len(fields))
 			v := reflect.New(t).Elem()
@@ -245,7 +309,7 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 		f := t.Field(i)
 		ft := f.Type
 
-		if ft.Implements(scannerType) {
+		if ft.Implements(scannerType) || ft == timeType || ft == byteSliceType {
 			out = append(out, field{
 				name:  fieldName(f),
 				index: []int{i},
@@ -255,6 +319,9 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 
 		switch ft.Kind() {
 		case reflect.Struct:
+			if !f.Anonymous {
+				return nil, fmt.Errorf("struct field \"%s %s\" must implement sql.Scanner to be mapped to a field", f.Name, ft)
+			}
 			sub, err := q.collectFieldIndexes(ft)
 			if err != nil {
 				return nil, err
@@ -265,7 +332,7 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 			}
 
 		case reflect.Slice, reflect.Array:
-			return nil, fmt.Errorf("can't select into a slice")
+			return nil, fmt.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
 
 		default:
 			out = append(out, field{
