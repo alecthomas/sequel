@@ -42,6 +42,15 @@ func Open(driver, dsn string) (*DB, error) {
 	return &DB{DB: db, queryable: queryable{db: db, dialect: dialect}}, nil
 }
 
+// New creates a new Sequel mapper from an existing DB connection.
+func New(driver string, db *sql.DB) (*DB, error) {
+	dialect, ok := dialects[driver]
+	if !ok {
+		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
+	}
+	return &DB{DB: db, queryable: queryable{db: db, dialect: dialect}}, nil
+}
+
 // Close underlying database connection.
 func (q *DB) Close() error {
 	return q.DB.Close()
