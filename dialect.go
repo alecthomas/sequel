@@ -67,7 +67,7 @@ func (d *dialect) expand(query string, args []interface{}) (string, []interface{
 		// Newly seen argument, expand and cache it.
 		arg := args[argi]
 		v := reflect.ValueOf(arg)
-		parameterArgs, err := d.expandParameter(true, w, &outIndex, v)
+		parameterArgs, _, err := d.expandParameter(true, w, &outIndex, v)
 		if err != nil {
 			return "", nil, err
 		}
@@ -80,35 +80,30 @@ func (d *dialect) expand(query string, args []interface{}) (string, []interface{
 // Expand a single parameter.
 //
 // Parentheses will enclose struct fields and slice elements unless "root" is true.
-func (d *dialect) expandParameter(root bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, err error) {
+func (d *dialect) expandParameter(wrap bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, columns []string, err error) {
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.String, reflect.Float32, reflect.Float64:
 		w.WriteString(d.sequential(*index))
 		*index++
-		return []interface{}{v.Interface()}, nil
+		return []interface{}{v.Interface()}, nil, nil
 
 	case reflect.Slice, reflect.Array:
-		if !root {
-			w.WriteString("(")
-		}
 		for i := 0; i < v.Len(); i++ {
 			if i > 0 {
 				w.WriteString(", ")
 			}
-			children, err := d.expandParameter(false, w, index, v.Index(i))
+			children, childcolumns, err := d.expandParameter(wrap, w, index, v.Index(i))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out = append(out, children...)
-		}
-		if !root {
-			w.WriteString(")")
+			columns = append(columns, childcolumns...)
 		}
 
 	case reflect.Struct:
-		if !root {
+		if wrap {
 			w.WriteString("(")
 		}
 		t := v.Type()
@@ -117,13 +112,21 @@ func (d *dialect) expandParameter(root bool, w *strings.Builder, index *int, v r
 			if i > 0 {
 				w.WriteString(", ")
 			}
-			children, err := d.expandParameter(ft.Anonymous, w, index, v.Field(i))
+			if !ft.Anonymous {
+				name := ft.Name
+				if tag, ok := ft.Tag.Lookup("db"); ok {
+					name = tag
+				}
+				columns = append(columns, name)
+			}
+			children, childcolumns, err := d.expandParameter(!ft.Anonymous, w, index, v.Field(i))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out = append(out, children...)
+			columns = append(columns, childcolumns...)
 		}
-		if !root {
+		if wrap {
 			w.WriteString(")")
 		}
 
@@ -131,23 +134,21 @@ func (d *dialect) expandParameter(root bool, w *strings.Builder, index *int, v r
 		if v.IsNil() {
 			w.WriteString(d.sequential(*index))
 			*index++
-			return []interface{}{nil}, nil
+			return []interface{}{nil}, nil, nil
 		}
-		children, err := d.expandParameter(root, w, index, v.Elem())
+		out, columns, err = d.expandParameter(wrap, w, index, v.Elem())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out = append(out, children...)
 
 	case reflect.Interface:
-		children, err := d.expandParameter(root, w, index, v.Elem())
+		out, columns, err = d.expandParameter(wrap, w, index, v.Elem())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out = append(out, children...)
 
 	default:
-		return nil, fmt.Errorf("unsupported parameter %s", v.Type())
+		return nil, nil, fmt.Errorf("unsupported parameter %s", v.Type())
 	}
-	return out, nil
+	return out, columns, nil
 }

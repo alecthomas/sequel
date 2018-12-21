@@ -50,21 +50,23 @@ func TestDialectExpand(t *testing.T) {
 			},
 		},
 		{
-			name:  "SliceOfSlices",
-			query: `INSERT INTO user VALUES ?`,
-			args: []interface{}{
-				[]interface{}{[]interface{}{43, "Moe"}, []interface{}{39, "Curly"}},
-			},
+			name:  "Struct",
+			query: `INSERT INTO user (name, age, email) VALUES ?`,
+			args: []interface{}{struct {
+				Name  string;
+				Age   int;
+				Email string
+			}{"Moe", 39, "moe@stooges.com"}},
 			expected: []dialectResult{
 				{
 					dialect: pqDialect,
-					args:    []interface{}{43, "Moe", 39, "Curly"},
-					query:   `INSERT INTO user VALUES ($1, $2), ($3, $4)`,
+					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
+					query:   `INSERT INTO user (name, age, email) VALUES ($1, $2, $3)`,
 				},
 				{
 					dialect: mysqlDialect,
-					args:    []interface{}{43, "Moe", 39, "Curly"},
-					query:   `INSERT INTO user VALUES (?, ?), (?, ?)`,
+					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
+					query:   `INSERT INTO user (name, age, email) VALUES (?, ?, ?)`,
 				},
 			},
 		},
@@ -93,25 +95,37 @@ func TestDialectExpand(t *testing.T) {
 		},
 		{
 			name:  "EmbeddedStruct",
-			query: `INSERT INTO table VALUES (?)`,
-			args: []interface{}{TestUser{
-				ID:   2,
-				Name: "Moe",
-				TestMetadata: TestMetadata{
-					Email: "moe@stooges.com",
-					Age:   39,
+			query: `INSERT INTO table VALUES ?`,
+			args: []interface{}{
+				[]TestUser{
+					TestUser{
+						ID:   2,
+						Name: "Moe",
+						TestMetadata: TestMetadata{
+							Email: "moe@stooges.com",
+							Age:   39,
+						},
+					},
+					TestUser{
+						ID:   3,
+						Name: "Curly",
+						TestMetadata: TestMetadata{
+							Email: "curly@stooges.com",
+							Age:   39,
+						},
+					},
 				},
-			}},
+			},
 			expected: []dialectResult{
 				{
 					dialect: pqDialect,
-					query:   `INSERT INTO table VALUES ($1, $2, $3, $4)`,
-					args:    []interface{}{2, "Moe", "moe@stooges.com", 39},
+					query:   `INSERT INTO table VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+					args:    []interface{}{2, "Moe", "moe@stooges.com", 39, 3, "Curly", "curly@stooges.com", 39},
 				},
 				{
 					dialect: mysqlDialect,
-					query:   `INSERT INTO table VALUES (?, ?, ?, ?)`,
-					args:    []interface{}{2, "Moe", "moe@stooges.com", 39},
+					query:   `INSERT INTO table VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
+					args:    []interface{}{2, "Moe", "moe@stooges.com", 39, 3, "Curly", "curly@stooges.com", 39},
 				},
 			},
 		},

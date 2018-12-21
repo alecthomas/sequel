@@ -22,7 +22,7 @@ Open a DB connection:
 db, err := sequel.Open("mysql", "root@/database")
 ```
 
-Insert some users:
+Insert<sup><a href="#footnote-insert">1</a></sup> some users:
 
 ```go
 users := []struct{
@@ -35,10 +35,6 @@ users := []struct{
 }
 err = db.Exec(`INSERT INTO users (name, email) VALUES ?`, users)
 ```
-
-> Currently there is no `Insert(...)` method; insertion is done via SQL.
-> The downside of this is that the primary key of the inserted model will not be updated
-> automatically. As Sequel evolves, this decision may be reassessed.
 
 Selecting uses a similar approach:
 
@@ -55,10 +51,17 @@ err = db.Select(&users, `
 `, groupID)
 ```
 
-## Placeholder parameter expansion
+## Placeholder expansion rules
 
-Sequel supports placeholder parameter expansion not only from scalar types (`int`, `string`, etc.) but from slices,
-structs, and slices of structs.
+Each placeholder symbol `?` in a query string maps 1:1 to a corresponding argument in the `Select()` or `Exec()` call.
+
+Arguments are expanded recursively. Structs map to a parentheses-enclosed, comma-separated list. Slices map to a comma-separated list.
+
+Value                                           | Corresponding expanded placeholders
+------------------------------------------------|---------------------------------------
+`struct{A, B, C string}{"A", "B", "C"}`         | `(?, ?, ?)`
+`[]string{"A", "B"}`                            | `?, ?`
+`[]struct{A, B string}{{"A", "B"}, {"C", "D"}}` | `(?, ?), (?, ?)`
 
 ### A simple select with parameters populated from a struct
 
@@ -120,3 +123,8 @@ err := db.Select(&users, `SELECT * FROM users WHERE (name, email) IN (?, ?), (?,
     matches[2].Name, matches[2].Email,
 )
 ```
+
+
+<sup id="footnote-insert">**1.** Currently there is no `Insert(...)` method; insertion is done via SQL.
+The downside of this is that the primary key of the inserted model will not be updated
+automatically. As Sequel evolves, this decision may be reassessed.</sup>

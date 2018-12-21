@@ -36,7 +36,7 @@ type invalidUser struct {
 var (
 	larry = user{Name: str("Larry"), Email: "larry@stooges.com", ID: 1}
 	moe   = user{Email: "moe@stooges.com", ID: 2}
-	curly = user{Name: str("Moe"), Email: "moe@stooges.com", ID: 3}
+	curly = user{Name: str("Curly"), Email: "curly@stooges.com", ID: 3}
 )
 
 func TestDBSelect(t *testing.T) {
@@ -59,14 +59,27 @@ func TestDBSelect(t *testing.T) {
 			query: "SELECT * FROM users",
 			dest:  &[]invalidUser{},
 			err:   "no field"},
+		{name: "Struct",
+			query: "SELECT * FROM users WHERE (name, email) = ?",
+			args: []interface{}{
+				nested{Name: str("Larry"), Email: "larry@stooges.com"},
+			},
+			dest:     &[]user{},
+			expected: &[]user{larry}},
 		{name: "SliceOfStructs",
 			query: "SELECT * FROM users WHERE (name, email) IN (?)",
 			args: []interface{}{
 				[]nested{{Name: str("Larry"), Email: "larry@stooges.com"}},
 			},
 			dest:     &[]user{},
-			expected: &[]user{larry},
-		},
+			expected: &[]user{larry}},
+		{name: "SliceOfStrings",
+			query: "SELECT * FROM users WHERE email IN (?)",
+			args: []interface{}{
+				[]string{"curly@stooges.com", "moe@stooges.com"},
+			},
+			dest:     &[]user{},
+			expected: &[]user{moe, curly}},
 	}
 
 	for _, test := range tests {
