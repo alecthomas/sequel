@@ -20,16 +20,42 @@ var (
 	mysqlDialect = dialect{
 		name:       "mysql",
 		sequential: func(int) string { return "?" },
+		upsert:     mysqlUpsert,
 	}
 	pqDialect = dialect{
 		name:       "postgres",
 		sequential: func(n int) string { return fmt.Sprintf("$%d", n+1) },
+		upsert:     pqUpsert,
 	}
 	sqliteDialect = dialect{
 		name:       "sqlite3",
 		sequential: func(int) string { return "?" },
+		upsert:     pqUpsert,
 	}
 )
+
+func mysqlUpsert(table string, builder *builder) string {
+	set := []string{}
+	for _, field := range builder.fields {
+		set = append(set, fmt.Sprintf("%s = VALUE(%s)", field, field))
+	}
+	return fmt.Sprintf(`
+				INSERT INTO %s (%s) VALUES ?
+				ON DUPLICATE KEY UPDATE %s
+				`, table, strings.Join(builder.fields, ", "), strings.Join(set, ", "))
+}
+
+func pqUpsert(table string, builder *builder) string {
+	set := []string{}
+	for _, field := range builder.fields {
+		set = append(set, fmt.Sprintf("%s = excluded.%s", field, field))
+	}
+	return fmt.Sprintf(`
+				INSERT INTO %s (%s) VALUES ?
+				ON CONFLICT (%s)
+				DO UPDATE SET %s
+				`, table, strings.Join(builder.fields, ", "), builder.pk, strings.Join(set, ", "))
+}
 
 // A dialect knows how to map Sequel placeholders to dialect-specific placeholders.
 //
@@ -37,6 +63,7 @@ var (
 type dialect struct {
 	name       string
 	sequential func(n int) string // Sequential placeholder.
+	upsert     func(table string, builder *builder) string
 }
 
 // Expand a query and arguments using the Sequel recursive expansion rules.

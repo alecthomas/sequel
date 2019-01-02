@@ -10,13 +10,13 @@ import (
 	"github.com/alecthomas/sequel"
 )
 
-type nested struct {
+type userData struct {
 	Name  *string
 	Email string
 }
 
 type user struct {
-	ID    int
+	ID    int `db:"id,pk"`
 	Name  *string
 	Email string
 }
@@ -56,14 +56,14 @@ func TestDBSelect(t *testing.T) {
 		{name: "Struct",
 			query: "SELECT * FROM users WHERE (name, email) = ?",
 			args: []interface{}{
-				nested{Name: str("Larry"), Email: "larry@stooges.com"},
+				userData{Name: str("Larry"), Email: "larry@stooges.com"},
 			},
 			dest:     &[]user{},
 			expected: &[]user{larry}},
 		{name: "SliceOfStructs",
 			query: "SELECT * FROM users WHERE (name, email) IN (?)",
 			args: []interface{}{
-				[]nested{{Name: str("Larry"), Email: "larry@stooges.com"}},
+				[]userData{{Name: str("Larry"), Email: "larry@stooges.com"}},
 			},
 			dest:     &[]user{},
 			expected: &[]user{larry}},
@@ -168,6 +168,95 @@ func TestCommitOrRollbackOnError(t *testing.T) {
 	}
 }
 
+func TestInsert(t *testing.T) {
+	tests := []struct {
+		name          string
+		value         interface{}
+		err           bool
+		expectedID    int64
+		expectedCount int64
+	}{
+		{name: "ValidWithPK", value: user{ID: 1, Email: "larry@stooges.com"}, expectedID: 1},
+		{name: "InvalidColumn", value: invalidUser{}, err: true},
+		{name: "PartialInsertWithAutoIncrementID", value: userData{Email: "moe@stooges.com"}, expectedID: 1},
+		{name: "MultiplePartialInserts", value: []userData{
+			userData{Email: "moe@stooges.com"},
+			userData{Email: "larry@stooges.com"},
+		}, expectedCount: 2, expectedID: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := databaseFixture(t)
+			defer db.Close()
+
+			res, err := db.Insert("users", test.value)
+			if test.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				rows, err := res.RowsAffected()
+				require.NoError(t, err)
+				expectedCount := test.expectedCount
+				if expectedCount == 0 {
+					expectedCount = 1
+				}
+				require.Equal(t, rows, expectedCount)
+				if test.expectedID != 0 {
+					id, err := res.LastInsertId()
+					require.NoError(t, err)
+					require.Equal(t, test.expectedID, id)
+				}
+			}
+		})
+	}
+}
+
+func TestUpsert(t *testing.T) {
+	tests := []struct {
+		name          string
+		value         interface{}
+		err           bool
+		expectedCount int64
+		expected      *user
+	}{
+		{name: "Update",
+			value:         user{ID: 1, Name: str("Bob"), Email: "bob@stooges.com"},
+			expected:      &user{ID: 1, Name: str("Bob"), Email: "bob@stooges.com"},
+			expectedCount: 1},
+		{name: "Insert",
+			value:         user{ID: 4, Name: str("Fred"), Email: "fred@stooges.com"},
+			expected:      &user{ID: 4, Name: str("Fred"), Email: "fred@stooges.com"},
+			expectedCount: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := databaseFixture(t)
+			defer db.Close()
+			insertFixtures(t, db)
+
+			res, err := db.Upsert("users", test.value)
+			if test.err {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				rows, err := res.RowsAffected()
+				require.NoError(t, err)
+				expectedCount := test.expectedCount
+				if expectedCount == 0 {
+					expectedCount = 1
+				}
+				require.Equal(t, rows, expectedCount)
+				if test.expected != nil {
+					actual := &user{}
+					err = db.SelectOne(actual, `SELECT * FROM users WHERE id = ?`, test.expected.ID)
+					require.NoError(t, err)
+					require.Equal(t, test.expected, actual)
+				}
+			}
+		})
+	}
+}
+
 func databaseFixture(t *testing.T) *sequel.DB {
 	t.Helper()
 	db, err := sequel.Open("sqlite3", ":memory:")
@@ -188,14 +277,11 @@ func str(p string) *string { return &p }
 func insertFixtures(t *testing.T, db *sequel.DB) {
 	t.Helper()
 	// Insert fixture.
-	users := []struct {
-		Name  *string
-		Email string
-	}{
-		{str("Larry"), "larry@stooges.com"},
-		{nil, "moe@stooges.com"},
-		{str("Curly"), "curly@stooges.com"},
+	users := []user{
+		{1, str("Larry"), "larry@stooges.com"},
+		{2, nil, "moe@stooges.com"},
+		{3, str("Curly"), "curly@stooges.com"},
 	}
-	_, err := db.Exec(`INSERT INTO users (name, email) VALUES ?`, users)
+	_, err := db.Insert("users", users)
 	require.NoError(t, err)
 }

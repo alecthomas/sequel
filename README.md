@@ -22,7 +22,7 @@ Open a DB connection:
 db, err := sequel.Open("mysql", "root@/database")
 ```
 
-Insert<sup><a href="#footnote-insert">1</a></sup> some users:
+Insert some users:
 
 ```go
 users := []struct{
@@ -33,7 +33,7 @@ users := []struct{
     {"Larry", "larry@stooges.com"},
     {"Curly", "curly@stooges.com"},
 }
-err = db.Exec(`INSERT INTO users (name, email) VALUES ?`, users)
+err = db.Insert("users", users)
 ```
 
 Selecting uses a similar approach:
@@ -62,6 +62,18 @@ Value                                           | Corresponding expanded placeho
 `struct{A, B, C string}{"A", "B", "C"}`         | `(?, ?, ?)`
 `[]string{"A", "B"}`                            | `?, ?`
 `[]struct{A, B string}{{"A", "B"}, {"C", "D"}}` | `(?, ?), (?, ?)`
+
+## Insert
+
+The `Insert()` method accepts a list of rows (`Insert(table, rows)`), or a vararg 
+sequence (`Insert(table, row0, row1, row2)`). Column names are reflected from the first row.
+
+## Upsert
+
+`Upsert()` has the same syntax as `Insert()`, with the additional requirement that rows must 
+contain a field marked as a primary key.
+
+## Examples
 
 ### A simple select with parameters populated from a struct
 
@@ -124,7 +136,3 @@ err := db.Select(&users, `SELECT * FROM users WHERE (name, email) IN (?, ?), (?,
 )
 ```
 
-
-<sup id="footnote-insert">**1.** Currently there is no `Insert(...)` method; insertion is done via SQL.
-The downside of this is that the primary key of the inserted model will not be updated
-automatically. As Sequel evolves, this decision may be reassessed.</sup>

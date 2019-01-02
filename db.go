@@ -19,12 +19,6 @@ var (
 	rowBuilderLock  sync.Mutex
 )
 
-type builder struct {
-	fields []string
-	build  func(columns []string) (reflect.Value, []interface{})
-	fill   func(v interface{}, columns []string) []interface{}
-}
-
 // DB over an existing sql.DB.
 type DB struct {
 	DB *sql.DB
@@ -32,10 +26,8 @@ type DB struct {
 }
 
 // Open a database connection.
-//
-// The corresponding dialect will be automatically detected if possible.
 func Open(driver, dsn string) (*DB, error) {
-	dialect, ok := dialects[driver]
+	_, ok := dialects[driver]
 	if !ok {
 		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
 	}
@@ -43,7 +35,7 @@ func Open(driver, dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DB{DB: db, queryable: queryable{db: db, dialect: dialect}}, nil
+	return New(driver, db)
 }
 
 // New creates a new Sequel mapper from an existing DB connection.
@@ -52,7 +44,10 @@ func New(driver string, db *sql.DB) (*DB, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
 	}
-	return &DB{DB: db, queryable: queryable{db: db, dialect: dialect}}, nil
+	return &DB{DB: db, queryable: queryable{
+		db:      db,
+		dialect: dialect,
+	}}, nil
 }
 
 // Close underlying database connection.
@@ -122,6 +117,59 @@ type commonOps interface {
 type queryable struct {
 	db      commonOps
 	dialect dialect
+}
+
+// Insert rows.
+//
+// If one value is provided and it itself is a slice, each element in the slice will be a
+// row to insert. Otherwise each argument will be a row to insert.
+//
+// This is a convenience function for automatically generating the appropriate column
+// names.
+func (q *queryable) Insert(table string, rows ...interface{}) (sql.Result, error) {
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no rows to insert")
+	}
+	arg, t := q.typeForMutationRows(rows...)
+	builder, err := q.makeRowBuilderForType(t)
+	if err != nil {
+		return nil, err
+	}
+	sql := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`, table, strings.Join(builder.fields, ", "))
+	return q.Exec(sql, arg)
+}
+
+// Upsert rows.
+//
+// The given struct must have a field tagged as a primary key.
+//
+// Existing rows will be updated and new rows will be inserted.
+func (q *queryable) Upsert(table string, rows ...interface{}) (sql.Result, error) {
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("no rows to update")
+	}
+	arg, t := q.typeForMutationRows(rows...)
+	builder, err := q.makeRowBuilderForType(t)
+	if err != nil {
+		return nil, err
+	}
+	if builder.pk == "" {
+		return nil, fmt.Errorf("cannot update table %q from struct %T without a PK field tagged `db:\"<name>,pk\"`", table, rows[0])
+	}
+	sql := q.dialect.upsert(table, builder)
+	return q.Exec(sql, arg)
+}
+
+func (q *queryable) typeForMutationRows(rows ...interface{}) (arg interface{}, t reflect.Type) {
+	arg = rows
+	t = reflect.TypeOf(rows[0])
+	if len(rows) == 1 {
+		if t.Kind() == reflect.Slice {
+			t = t.Elem()
+		}
+		arg = reflect.ValueOf(rows[0]).Interface()
+	}
+	return
 }
 
 // Expand query and args using Sequel's expansion rules.
@@ -265,6 +313,9 @@ func (q *queryable) makeRowBuilderForSlice(slice interface{}) (*builder, error) 
 }
 
 func (q *queryable) makeRowBuilderForType(t reflect.Type) (*builder, error) {
+	if t.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("can only build rows for structs not %s", t)
+	}
 	rowBuilderLock.Lock()
 	defer rowBuilderLock.Unlock()
 	if builder, ok := rowBuilderCache[t]; ok {
@@ -277,34 +328,15 @@ func (q *queryable) makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	}
 	fieldMap := map[string]field{}
 	fieldNames := []string{}
+	pk := ""
 	for _, field := range fields {
+		if field.pk {
+			pk = field.name
+		}
 		fieldNames = append(fieldNames, field.name)
 		fieldMap[field.name] = field
 	}
-	return &builder{
-		fields: fieldNames,
-		fill: func(v interface{}, columns []string) (out []interface{}) {
-			rv := reflect.ValueOf(v).Elem()
-			out = make([]interface{}, len(fields))
-			for i, column := range columns {
-				out[i] = rv.FieldByIndex(fieldMap[column].index).Addr().Interface()
-			}
-			return
-		},
-		build: func(columns []string) (reflect.Value, []interface{}) {
-			out := make([]interface{}, len(fields))
-			v := reflect.New(t).Elem()
-			for i, column := range columns {
-				out[i] = v.FieldByIndex(fieldMap[column].index).Addr().Interface()
-			}
-			return v, out
-		},
-	}, nil
-}
-
-type field struct {
-	name  string
-	index []int
+	return &builder{pk: pk, t: t, fields: fieldNames, fieldMap: fieldMap}, nil
 }
 
 func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
@@ -314,8 +346,10 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 		ft := f.Type
 
 		if ft.Implements(scannerType) || ft == timeType || ft == byteSliceType {
+			name, pk := parseField(f)
 			out = append(out, field{
-				name:  fieldName(f),
+				name:  name,
+				pk:    pk,
 				index: []int{i},
 			})
 			continue
@@ -339,8 +373,10 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 			return nil, fmt.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
 
 		default:
+			name, pk := parseField(f)
 			out = append(out, field{
-				name:  fieldName(f),
+				name:  name,
+				pk:    pk,
 				index: []int{i},
 			})
 		}
@@ -349,9 +385,51 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 	return out, nil
 }
 
-func fieldName(f reflect.StructField) string {
-	if tag, ok := f.Tag.Lookup("db"); ok {
-		return tag
+func parseField(f reflect.StructField) (name string, pk bool) {
+	name = strings.ToLower(f.Name)
+	tag, ok := f.Tag.Lookup("db")
+	if !ok {
+		return
 	}
-	return strings.ToLower(f.Name)
+	parts := strings.Split(tag, ",")
+	if parts[0] != "" {
+		name = parts[0]
+	}
+	for _, part := range parts[1:] {
+		if part == "pk" {
+			pk = true
+		}
+	}
+	return
+}
+
+type field struct {
+	name  string
+	pk    bool
+	index []int
+}
+
+type builder struct {
+	pk       string
+	t        reflect.Type
+	fields   []string
+	fieldMap map[string]field
+}
+
+func (b *builder) fill(v interface{}, columns []string) (out []interface{}) {
+	rv := reflect.ValueOf(v).Elem()
+	out = make([]interface{}, len(b.fields))
+	for i, column := range columns {
+		out[i] = rv.FieldByIndex(b.fieldMap[column].index).Addr().Interface()
+	}
+	return
+}
+
+func (b *builder) build(columns []string) (reflect.Value, []interface{}) {
+	out := make([]interface{}, len(b.fields))
+	v := reflect.New(b.t).Elem()
+	for i, column := range columns {
+		out[i] = v.FieldByIndex(b.fieldMap[column].index).Addr().Interface()
+	}
+	return v, out
 }
