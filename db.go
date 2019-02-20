@@ -19,6 +19,21 @@ var (
 	rowBuilderLock  sync.Mutex
 )
 
+// Interface common to raw database connection and transactions.
+//
+// See DB or Transaction for documentation.
+type Interface interface {
+	Insert(table string, rows ...interface{}) (sql.Result, error)
+	Upsert(table string, rows ...interface{}) (sql.Result, error)
+	Expand(query string, args ...interface{}) (string, []interface{}, error)
+	Exec(query string, args ...interface{}) (res sql.Result, err error)
+	Select(slice interface{}, query string, args ...interface{}) (err error)
+	SelectOne(ref interface{}, query string, args ...interface{}) error
+	SelectScalar(value interface{}, query string, args ...interface{}) (err error)
+	SelectInt(query string, args ...interface{}) (value int, err error)
+	SelectString(query string, args ...interface{}) (value string, err error)
+}
+
 // Option for modifying the behaviour of Sequel.
 type Option func(db *DB)
 
