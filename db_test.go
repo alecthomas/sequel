@@ -257,9 +257,25 @@ func TestUpsert(t *testing.T) {
 	}
 }
 
-func databaseFixture(t *testing.T) *sequel.DB {
+func TestUnsafe(t *testing.T) {
+	db := databaseFixture(t, sequel.Unsafe())
+	defer db.Close()
+	insertFixtures(t, db)
+
+	type oldModel struct {
+		ID   int
+		Name *string
+	}
+
+	rows := []oldModel{}
+	err := db.Select(&rows, `SELECT * FROM users`)
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+}
+
+func databaseFixture(t *testing.T, options ...sequel.Option) *sequel.DB {
 	t.Helper()
-	db, err := sequel.Open("sqlite3", ":memory:")
+	db, err := sequel.Open("sqlite3", ":memory:", options...)
 	require.NoError(t, err)
 	_, err = db.Exec(`
 	CREATE TABLE users (

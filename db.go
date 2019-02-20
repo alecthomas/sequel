@@ -19,6 +19,16 @@ var (
 	rowBuilderLock  sync.Mutex
 )
 
+// Option for modifying the behaviour of Sequel.
+type Option func(db *DB)
+
+// Unsafe disables strict checking of column mappings.
+func Unsafe() Option {
+	return func(db *DB) {
+		db.strict = false
+	}
+}
+
 // DB over an existing sql.DB.
 type DB struct {
 	DB *sql.DB
@@ -26,7 +36,7 @@ type DB struct {
 }
 
 // Open a database connection.
-func Open(driver, dsn string) (*DB, error) {
+func Open(driver, dsn string, options ...Option) (*DB, error) {
 	_, ok := dialects[driver]
 	if !ok {
 		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
@@ -35,19 +45,27 @@ func Open(driver, dsn string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(driver, db)
+	return New(driver, db, options...)
 }
 
 // New creates a new Sequel mapper from an existing DB connection.
-func New(driver string, db *sql.DB) (*DB, error) {
+func New(driver string, db *sql.DB, options ...Option) (*DB, error) {
 	dialect, ok := dialects[driver]
 	if !ok {
 		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
 	}
-	return &DB{DB: db, queryable: queryable{
-		db:      db,
-		dialect: dialect,
-	}}, nil
+	sqldb := &DB{
+		DB: db,
+		queryable: queryable{
+			db:      db,
+			dialect: dialect,
+			strict:  true,
+		},
+	}
+	for _, opt := range options {
+		opt(sqldb)
+	}
+	return sqldb, nil
 }
 
 // Close underlying database connection.
@@ -117,6 +135,7 @@ type commonOps interface {
 type queryable struct {
 	db      commonOps
 	dialect dialect
+	strict  bool
 }
 
 // Insert rows.
@@ -201,9 +220,13 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 	if err != nil {
 		return err
 	}
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return err
+	}
 	out := reflect.ValueOf(slice).Elem()
 	for rows.Next() {
-		el, values := builder.build(columns)
+		el, values := builder.build(columns, types)
 		err = rows.Scan(values...)
 		if err != nil {
 			return fmt.Errorf("%s; %s", mapping, err)
@@ -255,6 +278,12 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 		_ = rows.Close()
 		return nil, nil, "", err
 	}
+	mapping = fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
+	if !q.strict {
+		return rows, columns, mapping, nil
+	}
+
+	// Strict checks.
 	fieldMap := map[string]bool{}
 	for _, field := range builder.fields {
 		fieldMap[field] = true
@@ -265,7 +294,6 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 			return nil, nil, "", fmt.Errorf("no field in (%s) maps to result column %q", strings.Join(builder.fields, ", "), column)
 		}
 	}
-	mapping = fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
 	if len(columns) != len(builder.fields) {
 		_ = rows.Close()
 		return nil, nil, "", fmt.Errorf("invalid mapping %s", mapping)
@@ -425,11 +453,34 @@ func (b *builder) fill(v interface{}, columns []string) (out []interface{}) {
 	return
 }
 
-func (b *builder) build(columns []string) (reflect.Value, []interface{}) {
-	out := make([]interface{}, len(b.fields))
+func (b *builder) build(columns []string, types []*sql.ColumnType) (reflect.Value, []interface{}) {
+	out := make([]interface{}, len(columns))
 	v := reflect.New(b.t).Elem()
 	for i, column := range columns {
-		out[i] = v.FieldByIndex(b.fieldMap[column].index).Addr().Interface()
+		field, ok := b.fieldMap[column]
+		if ok {
+			out[i] = v.FieldByIndex(field.index).Addr().Interface()
+			continue
+		}
+
+		// Should only hit this in unsafe mode.
+		switch types[i].DatabaseTypeName() {
+		case "VARCHAR", "TEXT", "NVARCHAR", "STRING", "CHARACTER", "VARYING CHARACTER", "NCHAR", "NATIVE CHARACTER", "CLOB":
+			out[i] = new(string)
+		case "NUMERIC", "DECIMAL", "INT", "BIGINT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "UNSIGNED BIG INT", "INT2", "INT8":
+			out[i] = new(int64)
+		case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION":
+			out[i] = new(float64)
+		case "BOOL":
+			out[i] = new(bool)
+		case "DATE", "DATETIME":
+			out[i] = &time.Time{}
+		case "BYTE":
+			b := []byte{}
+			out[i] = &b
+		default:
+			panic("unsupported missing field type " + types[i].DatabaseTypeName())
+		}
 	}
 	return v, out
 }
