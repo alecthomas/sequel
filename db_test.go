@@ -1,6 +1,7 @@
 package sequel_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -11,19 +12,19 @@ import (
 )
 
 type userData struct {
-	Name  *string
+	Name  sql.NullString
 	Email string
 }
 
 type user struct {
 	ID    int `db:"id,pk"`
-	Name  *string
+	Name  sql.NullString
 	Email string
 }
 
 type invalidUser struct {
 	ID   int
-	Name *string
+	Name sql.NullString
 	Mail string
 }
 
@@ -288,14 +289,14 @@ func databaseFixture(t *testing.T, options ...sequel.Option) *sequel.DB {
 	return db
 }
 
-func str(p string) *string { return &p }
+func str(p string) sql.NullString { return sql.NullString{String: p, Valid: true} }
 
 func insertFixtures(t *testing.T, db *sequel.DB) {
 	t.Helper()
 	// Insert fixture.
 	users := []user{
 		{1, str("Larry"), "larry@stooges.com"},
-		{2, nil, "moe@stooges.com"},
+		{2, sql.NullString{}, "moe@stooges.com"},
 		{3, str("Curly"), "curly@stooges.com"},
 	}
 	_, err := db.Insert("users", users)

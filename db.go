@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 var (
@@ -54,11 +56,11 @@ type DB struct {
 func Open(driver, dsn string, options ...Option) (*DB, error) {
 	_, ok := dialects[driver]
 	if !ok {
-		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
+		return nil, errors.Errorf("unsupported SQL driver %q", driver)
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to open SQL connection")
 	}
 	return New(driver, db, options...)
 }
@@ -67,7 +69,7 @@ func Open(driver, dsn string, options ...Option) (*DB, error) {
 func New(driver string, db *sql.DB, options ...Option) (*DB, error) {
 	dialect, ok := dialects[driver]
 	if !ok {
-		return nil, fmt.Errorf("unsupported SQL driver %q", driver)
+		return nil, errors.Errorf("unsupported SQL driver %q", driver)
 	}
 	sqldb := &DB{
 		DB: db,
@@ -92,7 +94,7 @@ func (q *DB) Close() error {
 func (q *DB) Begin() (*Transaction, error) {
 	tx, err := q.DB.Begin()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to open transaction")
 	}
 	return &Transaction{
 		Tx:        tx,
@@ -162,12 +164,12 @@ type queryable struct {
 // names.
 func (q *queryable) Insert(table string, rows ...interface{}) (sql.Result, error) {
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no rows to insert")
+		return nil, errors.Errorf("no rows to insert")
 	}
 	arg, t := q.typeForMutationRows(rows...)
 	builder, err := q.makeRowBuilderForType(t)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
 	sql := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`, table, strings.Join(builder.fields, ", "))
 	return q.Exec(sql, arg)
@@ -180,15 +182,15 @@ func (q *queryable) Insert(table string, rows ...interface{}) (sql.Result, error
 // Existing rows will be updated and new rows will be inserted.
 func (q *queryable) Upsert(table string, rows ...interface{}) (sql.Result, error) {
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no rows to update")
+		return nil, errors.Errorf("no rows to update")
 	}
 	arg, t := q.typeForMutationRows(rows...)
 	builder, err := q.makeRowBuilderForType(t)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
 	if builder.pk == "" {
-		return nil, fmt.Errorf("cannot update table %q from struct %T without a PK field tagged `db:\"<name>,pk\"`", table, rows[0])
+		return nil, errors.Errorf("cannot update table %q from struct %T without a PK field tagged `db:\"<name>,pk\"`", table, rows[0])
 	}
 	sql := q.dialect.upsert(table, builder)
 	return q.Exec(sql, arg)
@@ -217,10 +219,14 @@ func (q *queryable) Expand(query string, args ...interface{}) (string, []interfa
 func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err error) {
 	query, args, err = q.dialect.expand(query, args)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to expand query %q", query)
 	}
 	// TODO: Can we parse column names out of the statement, and reflect the same out of args, to be more type safe?
-	return q.db.Exec(query, args...)
+	result, err := q.db.Exec(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to execute %q", query)
+	}
+	return result, nil
 }
 
 // Select issues a query, and accumulates the returned rows into slice.
@@ -229,22 +235,22 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 func (q *queryable) Select(slice interface{}, query string, args ...interface{}) (err error) {
 	builder, err := q.makeRowBuilderForSlice(slice)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to map slice %T", slice)
 	}
 	rows, columns, mapping, err := q.prepareSelect(builder, query, args...)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to prepare select %q", query)
 	}
 	types, err := rows.ColumnTypes()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to retrieve result column types")
 	}
 	out := reflect.ValueOf(slice).Elem()
 	for rows.Next() {
 		el, values := builder.build(columns, types)
 		err = rows.Scan(values...)
 		if err != nil {
-			return fmt.Errorf("%s; %s", mapping, err)
+			return errors.Wrap(err, mapping)
 		}
 		out = reflect.Append(out, el)
 	}
@@ -258,11 +264,11 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}) error {
 	builder, err := q.makeRowBuilder(ref)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to map type %T", ref)
 	}
 	rows, columns, mapping, err := q.prepareSelect(builder, query, args...)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to prepare select %q", query)
 	}
 	defer rows.Close()
 	if !rows.Next() {
@@ -271,10 +277,10 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 	values := builder.fill(ref, columns)
 	err = rows.Scan(values...)
 	if err != nil {
-		return fmt.Errorf("%s; %s", mapping, err)
+		return errors.Wrap(err, mapping)
 	}
 	if rows.Next() {
-		return fmt.Errorf("more than one row returned")
+		return errors.Errorf("more than one row returned from %q", query)
 	}
 	return nil
 }
@@ -282,16 +288,16 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
 	query, args, err = q.dialect.expand(query, args)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", errors.Wrapf(err, "failed to expand query %q", query)
 	}
 	rows, err = q.db.Query(query, args...)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("%s; %q (mapping to fields %s)", err, query, strings.Join(builder.fields, ", "))
+		return nil, nil, "", errors.Wrapf(err, "%q (mapping to fields %s)", query, strings.Join(builder.fields, ", "))
 	}
 	columns, err = rows.Columns()
 	if err != nil {
 		_ = rows.Close()
-		return nil, nil, "", err
+		return nil, nil, "", errors.Wrap(err, "failed to retrieve columns")
 	}
 	mapping = fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
 	if !q.strict {
@@ -306,12 +312,12 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 	for _, column := range columns {
 		if !fieldMap[column] {
 			_ = rows.Close()
-			return nil, nil, "", fmt.Errorf("no field in (%s) maps to result column %q", strings.Join(builder.fields, ", "), column)
+			return nil, nil, "", errors.Errorf("no field in (%s) maps to result column %q", strings.Join(builder.fields, ", "), column)
 		}
 	}
 	if len(columns) != len(builder.fields) {
 		_ = rows.Close()
-		return nil, nil, "", fmt.Errorf("invalid mapping %s", mapping)
+		return nil, nil, "", errors.Errorf("invalid mapping %s", mapping)
 	}
 	return rows, columns, mapping, nil
 }
@@ -320,7 +326,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 func (q *queryable) SelectScalar(value interface{}, query string, args ...interface{}) (err error) {
 	query, args, err = q.dialect.expand(query, args)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to expand query %q", query)
 	}
 	row := q.db.QueryRow(query, args...)
 	return row.Scan(value)
@@ -340,7 +346,7 @@ func (q *queryable) SelectString(query string, args ...interface{}) (value strin
 func (q *queryable) makeRowBuilder(v interface{}) (*builder, error) {
 	t := reflect.TypeOf(v)
 	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
-		return nil, fmt.Errorf("can only scan into pointer to struct, not %s", t)
+		return nil, errors.Errorf("can only scan into pointer to struct, not %s", t)
 	}
 	return q.makeRowBuilderForType(t.Elem())
 }
@@ -349,7 +355,7 @@ func (q *queryable) makeRowBuilder(v interface{}) (*builder, error) {
 func (q *queryable) makeRowBuilderForSlice(slice interface{}) (*builder, error) {
 	t := reflect.TypeOf(slice)
 	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Slice || t.Elem().Elem().Kind() != reflect.Struct {
-		return nil, fmt.Errorf("expected a pointer to a slice of structs but got %T", slice)
+		return nil, errors.Errorf("expected a pointer to a slice of structs but got %T", slice)
 	}
 	t = t.Elem().Elem()
 	return q.makeRowBuilderForType(t)
@@ -357,7 +363,7 @@ func (q *queryable) makeRowBuilderForSlice(slice interface{}) (*builder, error) 
 
 func (q *queryable) makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	if t.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("can only build rows for structs not %s", t)
+		return nil, errors.Errorf("can only build rows for structs not %s", t)
 	}
 	rowBuilderLock.Lock()
 	defer rowBuilderLock.Unlock()
@@ -367,7 +373,7 @@ func (q *queryable) makeRowBuilderForType(t reflect.Type) (*builder, error) {
 
 	fields, err := q.collectFieldIndexes(t)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to collect field indexes")
 	}
 	fieldMap := map[string]field{}
 	fieldNames := []string{}
@@ -388,7 +394,7 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 		f := t.Field(i)
 		ft := f.Type
 
-		if ft.Implements(scannerType) || ft == timeType || ft == byteSliceType {
+		if ft == timeType || ft == byteSliceType || ft.Implements(scannerType) || reflect.PtrTo(ft).Implements(scannerType) {
 			name, pk := parseField(f)
 			out = append(out, field{
 				name:  name,
@@ -401,7 +407,7 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 		switch ft.Kind() {
 		case reflect.Struct:
 			if !f.Anonymous {
-				return nil, fmt.Errorf("struct field \"%s %s\" must implement sql.Scanner to be mapped to a field", f.Name, ft)
+				return nil, errors.Errorf("struct field \"%s %s\" must implement sql.Scanner to be mapped to a field", f.Name, ft)
 			}
 			sub, err := q.collectFieldIndexes(ft)
 			if err != nil {
@@ -413,7 +419,7 @@ func (q *queryable) collectFieldIndexes(t reflect.Type) ([]field, error) {
 			}
 
 		case reflect.Slice, reflect.Array:
-			return nil, fmt.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
+			return nil, errors.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
 
 		default:
 			name, pk := parseField(f)

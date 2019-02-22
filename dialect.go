@@ -1,10 +1,13 @@
 package sequel
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 var (
@@ -83,7 +86,7 @@ func (d *dialect) expand(query string, args []interface{}) (string, []interface{
 		// Placeholder - perform parameter expansion.
 		if match[1] == "?" {
 			if argi >= len(args) {
-				return "", nil, fmt.Errorf("placeholder %d is out of range", argi)
+				return "", nil, errors.Errorf("placeholder %d is out of range", argi)
 			}
 		}
 
@@ -125,6 +128,12 @@ func (d *dialect) expandParameter(wrap bool, w *strings.Builder, index *int, v r
 		}
 
 	case reflect.Struct:
+		if _, ok := v.Interface().(driver.Valuer); ok {
+			w.WriteString(d.sequential(*index))
+			*index++
+			return []interface{}{v.Interface()}, nil
+		}
+
 		if wrap {
 			w.WriteString("(")
 		}
@@ -162,7 +171,7 @@ func (d *dialect) expandParameter(wrap bool, w *strings.Builder, index *int, v r
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported parameter %s", v.Type())
+		return nil, errors.Errorf("unsupported parameter %s", v.Type())
 	}
 	return out, nil
 }
