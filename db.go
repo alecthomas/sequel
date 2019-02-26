@@ -25,8 +25,7 @@ var (
 //
 // See DB or Transaction for documentation.
 type Interface interface {
-	Insert(table string, rows ...interface{}) (sql.Result, error)
-	Upsert(table string, rows ...interface{}) (sql.Result, error)
+	Upsert(table string, keys []string, rows ...interface{}) (sql.Result, error)
 	Expand(query string, args ...interface{}) (string, []interface{}, error)
 	Exec(query string, args ...interface{}) (res sql.Result, err error)
 	Select(slice interface{}, query string, args ...interface{}) (err error)
@@ -51,6 +50,8 @@ type DB struct {
 	DB *sql.DB
 	queryable
 }
+
+var _ Interface = &DB{}
 
 // Open a database connection.
 func Open(driver, dsn string, options ...Option) (*DB, error) {
@@ -108,6 +109,8 @@ type Transaction struct {
 	queryable
 }
 
+var _ Interface = &Transaction{}
+
 // Commit transaction.
 func (t *Transaction) Commit() error {
 	return t.Tx.Commit()
@@ -155,24 +158,33 @@ type queryable struct {
 	strict  bool
 }
 
-// Insert rows.
+// Expand query and args using Sequel's expansion rules.
 //
-// If one value is provided and it itself is a slice, each element in the slice will be a
-// row to insert. Otherwise each argument will be a row to insert.
-//
-// This is a convenience function for automatically generating the appropriate column
-// names.
-func (q *queryable) Insert(table string, rows ...interface{}) (sql.Result, error) {
-	if len(rows) == 0 {
-		return nil, errors.Errorf("no rows to insert")
-	}
-	arg, t := q.typeForMutationRows(rows...)
-	builder, err := makeRowBuilderForType(t)
+// The resulting query and args can be used directly with any sql.DB.
+func (q *queryable) Expand(query string, args ...interface{}) (string, []interface{}, error) {
+	builder, err := makeRowBuilderForSliceOfInterface(args)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to map type %s", t)
+		return "", nil, err
 	}
-	sql := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`, table, strings.Join(builder.fields, ", "))
-	return q.Exec(sql, arg)
+	return q.dialect.expand(builder, query, args)
+}
+
+// Exec an SQL statement and ignore the result.
+func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err error) {
+	builder, err := makeRowBuilderForSliceOfInterface(args)
+	if err != nil {
+		return nil, err
+	}
+	query, args, err = q.dialect.expand(builder, query, args)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to expand query %q", query)
+	}
+	// TODO: Can we parse column names out of the statement, and reflect the same out of args, to be more type safe?
+	result, err := q.db.Exec(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to execute %q", query)
+	}
+	return result, nil
 }
 
 // Upsert rows.
@@ -180,7 +192,7 @@ func (q *queryable) Insert(table string, rows ...interface{}) (sql.Result, error
 // The given struct must have a field tagged as a primary key.
 //
 // Existing rows will be updated and new rows will be inserted.
-func (q *queryable) Upsert(table string, rows ...interface{}) (sql.Result, error) {
+func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sql.Result, error) {
 	if len(rows) == 0 {
 		return nil, errors.Errorf("no rows to update")
 	}
@@ -189,10 +201,7 @@ func (q *queryable) Upsert(table string, rows ...interface{}) (sql.Result, error
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
-	if builder.pk == "" {
-		return nil, errors.Errorf("cannot update table %q from struct %T without a PK field tagged `db:\"<name>,pk\"`", table, rows[0])
-	}
-	sql := q.dialect.upsert(table, builder)
+	sql := q.dialect.upsert(table, keys, builder)
 	return q.Exec(sql, arg)
 }
 
@@ -206,27 +215,6 @@ func (q *queryable) typeForMutationRows(rows ...interface{}) (arg interface{}, t
 		arg = reflect.ValueOf(rows[0]).Interface()
 	}
 	return
-}
-
-// Expand query and args using Sequel's expansion rules.
-//
-// The resulting query and args can be used directly with any sql.DB.
-func (q *queryable) Expand(query string, args ...interface{}) (string, []interface{}, error) {
-	return q.dialect.expand(query, args)
-}
-
-// Exec an SQL statement and ignore the result.
-func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err error) {
-	query, args, err = q.dialect.expand(query, args)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to expand query %q", query)
-	}
-	// TODO: Can we parse column names out of the statement, and reflect the same out of args, to be more type safe?
-	result, err := q.db.Exec(query, args...)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to execute %q", query)
-	}
-	return result, nil
 }
 
 // Select issues a query, and accumulates the returned rows into slice.
@@ -286,7 +274,7 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 }
 
 func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
-	query, args, err = q.dialect.expand(query, args)
+	query, args, err = q.dialect.expand(builder, query, args)
 	if err != nil {
 		return nil, nil, "", errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -324,7 +312,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 
 // SelectScalar selects a single column row into value.
 func (q *queryable) SelectScalar(value interface{}, query string, args ...interface{}) (err error) {
-	query, args, err = q.dialect.expand(query, args)
+	query, args, err = q.dialect.expand(nil, query, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to expand query %q", query)
 	}

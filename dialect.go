@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	lexerRegex = regexp.MustCompile(`(\?)|("(?:\\.|[^"])*"|'(?:\\.|[^'])'|[^$?"']+)`)
+	lexerRegex = regexp.MustCompile("(\\?)|(\\*\\*)|(\\*)|(\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])'|`(?:\\.|[^`])`|[^$*?\"']+)")
 
 	dialects = map[string]dialect{
 		"mysql":    mysqlDialect,
@@ -37,7 +37,7 @@ var (
 	}
 )
 
-func mysqlUpsert(table string, builder *builder) string {
+func mysqlUpsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.fields {
 		set = append(set, fmt.Sprintf("%s = VALUE(%s)", field, field))
@@ -48,7 +48,7 @@ func mysqlUpsert(table string, builder *builder) string {
 				`, table, strings.Join(builder.fields, ", "), strings.Join(set, ", "))
 }
 
-func pqUpsert(table string, builder *builder) string {
+func pqUpsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.fields {
 		set = append(set, fmt.Sprintf("%s = excluded.%s", field, field))
@@ -57,7 +57,7 @@ func pqUpsert(table string, builder *builder) string {
 				INSERT INTO %s (%s) VALUES ?
 				ON CONFLICT (%s)
 				DO UPDATE SET %s
-				`, table, strings.Join(builder.fields, ", "), builder.pk, strings.Join(set, ", "))
+				`, table, strings.Join(builder.fields, ", "), strings.Join(keys, ", "), strings.Join(set, ", "))
 }
 
 // A dialect knows how to map Sequel placeholders to dialect-specific placeholders.
@@ -66,39 +66,44 @@ func pqUpsert(table string, builder *builder) string {
 type dialect struct {
 	name       string
 	sequential func(n int) string // Sequential placeholder.
-	upsert     func(table string, builder *builder) string
+	upsert     func(table string, keys []string, builder *builder) string
 }
 
 // Expand a query and arguments using the Sequel recursive expansion rules.
-func (d *dialect) expand(query string, args []interface{}) (string, []interface{}, error) {
+func (d *dialect) expand(builder *builder, query string, args []interface{}) (string, []interface{}, error) {
 	// Fragments of text making up the final statement.
 	w := &strings.Builder{}
 	out := []interface{}{}
 	argi := 0
 	outIndex := 0
 	for _, match := range lexerRegex.FindAllStringSubmatch(query, -1) {
-		// Text fragment, output it.
-		if match[1] == "" {
-			w.WriteString(match[2])
-			continue
-		}
-
-		// Placeholder - perform parameter expansion.
-		if match[1] == "?" {
+		switch {
+		case match[1] == "?":
+			// Placeholder - perform parameter expansion.
 			if argi >= len(args) {
 				return "", nil, errors.Errorf("placeholder %d is out of range", argi)
 			}
+			// Newly seen argument, expand and cache it.
+			arg := args[argi]
+			v := reflect.ValueOf(arg)
+			parameterArgs, err := d.expandParameter(true, w, &outIndex, v)
+			if err != nil {
+				return "", nil, err
+			}
+			out = append(out, parameterArgs...)
+			argi++
+		case match[2] == "**":
+			if builder == nil {
+				w.WriteString("*")
+			} else {
+				// Wildcard - expand all column names.
+				w.WriteString(strings.Join(builder.fields, ", "))
+			}
+		default:
+			// Text fragment, output it.
+			w.WriteString(match[0])
 		}
 
-		// Newly seen argument, expand and cache it.
-		arg := args[argi]
-		v := reflect.ValueOf(arg)
-		parameterArgs, err := d.expandParameter(true, w, &outIndex, v)
-		if err != nil {
-			return "", nil, err
-		}
-		out = append(out, parameterArgs...)
-		argi++
 	}
 	return w.String(), out, nil
 }

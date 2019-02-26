@@ -17,7 +17,7 @@ type userData struct {
 }
 
 type user struct {
-	ID    int `db:"id,pk"`
+	ID    int `db:"id"`
 	Name  sql.NullString
 	Email string
 }
@@ -53,7 +53,7 @@ func TestDBSelect(t *testing.T) {
 		{name: "MismatchedFieldName",
 			query: "SELECT * FROM users",
 			dest:  &[]invalidUser{},
-			err:   "no field"},
+			err:   "no field in"},
 		{name: "Struct",
 			query: "SELECT * FROM users WHERE (name, email) = ?",
 			args: []interface{}{
@@ -190,7 +190,7 @@ func TestInsert(t *testing.T) {
 			db := databaseFixture(t)
 			defer db.Close()
 
-			res, err := db.Insert("users", test.value)
+			res, err := db.Exec("INSERT INTO users (**) VALUES ?", test.value)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -235,7 +235,7 @@ func TestUpsert(t *testing.T) {
 			defer db.Close()
 			insertFixtures(t, db)
 
-			res, err := db.Upsert("users", test.value)
+			res, err := db.Upsert(`users`, []string{"id"}, test.value)
 			if test.err {
 				require.Error(t, err)
 			} else {
@@ -299,6 +299,6 @@ func insertFixtures(t *testing.T, db *sequel.DB) {
 		{2, sql.NullString{}, "moe@stooges.com"},
 		{3, str("Curly"), "curly@stooges.com"},
 	}
-	_, err := db.Insert("users", users)
+	_, err := db.Exec("INSERT INTO users (**) VALUES ?", users)
 	require.NoError(t, err)
 }

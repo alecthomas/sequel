@@ -28,6 +28,19 @@ func makeRowBuilderForSlice(slice interface{}) (*builder, error) {
 	return makeRowBuilderForType(t)
 }
 
+func makeRowBuilderForSliceOfInterface(slice []interface{}) (*builder, error) {
+	if len(slice) == 0 {
+		return nil, nil
+	}
+	v := reflect.ValueOf(slice[0])
+	if v.Kind() == reflect.Slice {
+		return makeRowBuilderForType(v.Index(0).Type())
+	} else if v.Kind() == reflect.Struct {
+		return makeRowBuilderForType(v.Type())
+	}
+	return nil, nil
+}
+
 func makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, errors.Errorf("can only build rows for structs not %s", t)
@@ -44,15 +57,11 @@ func makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	}
 	fieldMap := map[string]field{}
 	fieldNames := []string{}
-	pk := ""
 	for _, field := range fields {
-		if field.pk {
-			pk = field.name
-		}
 		fieldNames = append(fieldNames, field.name)
 		fieldMap[field.name] = field
 	}
-	return &builder{pk: pk, t: t, fields: fieldNames, fieldMap: fieldMap}, nil
+	return &builder{t: t, fields: fieldNames, fieldMap: fieldMap}, nil
 }
 
 func collectFieldIndexes(t reflect.Type) ([]field, error) {
@@ -62,12 +71,7 @@ func collectFieldIndexes(t reflect.Type) ([]field, error) {
 		ft := f.Type
 
 		if ft == timeType || ft == byteSliceType || ft.Implements(scannerType) || reflect.PtrTo(ft).Implements(scannerType) {
-			name, pk := parseField(f)
-			out = append(out, field{
-				name:  name,
-				pk:    pk,
-				index: []int{i},
-			})
+			out = append(out, parseField(f, []int{i}))
 			continue
 		}
 
@@ -89,44 +93,31 @@ func collectFieldIndexes(t reflect.Type) ([]field, error) {
 			return nil, errors.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
 
 		default:
-			name, pk := parseField(f)
-			out = append(out, field{
-				name:  name,
-				pk:    pk,
-				index: []int{i},
-			})
+			out = append(out, parseField(f, []int{i}))
 		}
 	}
 
 	return out, nil
 }
 
-func parseField(f reflect.StructField) (name string, pk bool) {
-	name = strings.ToLower(f.Name)
+func parseField(f reflect.StructField, index []int) field {
+	name := strings.ToLower(f.Name)
 	tag, ok := f.Tag.Lookup("db")
-	if !ok {
-		return
-	}
-	parts := strings.Split(tag, ",")
-	if parts[0] != "" {
-		name = parts[0]
-	}
-	for _, part := range parts[1:] {
-		if part == "pk" {
-			pk = true
+	if ok {
+		parts := strings.Split(tag, ",")
+		if parts[0] != "" {
+			name = parts[0]
 		}
 	}
-	return
+	return field{name: name, index: index}
 }
 
 type field struct {
 	name  string
-	pk    bool
 	index []int
 }
 
 type builder struct {
-	pk       string
 	t        reflect.Type
 	fields   []string
 	fieldMap map[string]field

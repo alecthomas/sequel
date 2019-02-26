@@ -55,13 +55,16 @@ err = db.Select(&users, `
 
 Each placeholder symbol `?` in a query string maps 1:1 to a corresponding argument in the `Select()` or `Exec()` call.
 
+The additional placeholder `**` will expand to the set of fields in your data model. This is useful.
+
 Arguments are expanded recursively. Structs map to a parentheses-enclosed, comma-separated list. Slices map to a comma-separated list.
 
-Value                                           | Corresponding expanded placeholders
-------------------------------------------------|---------------------------------------
-`struct{A, B, C string}{"A", "B", "C"}`         | `(?, ?, ?)`
-`[]string{"A", "B"}`                            | `?, ?`
-`[]struct{A, B string}{{"A", "B"}, {"C", "D"}}` | `(?, ?), (?, ?)`
+Value                                           | Placeholder | Corresponding expansion
+------------------------------------------------|-------------|-------------------------
+`struct{A, B, C string}{"A", "B", "C"}`         | `?`         | `(?, ?, ?)`
+`[]string{"A", "B"}`                            | `?`         | `?, ?`
+`[]struct{A, B string}{{"A", "B"}, {"C", "D"}}` | `?`         | `(?, ?), (?, ?)`
+`struct{A, B, C string}{"A", "B", "C"}`         | `**`        | `a, b, c`
 
 ## Insert
 
@@ -70,8 +73,24 @@ sequence (`Insert(table, row0, row1, row2)`). Column names are reflected from th
 
 ## Upsert
 
-`Upsert()` has the same syntax as `Insert()`, with the additional requirement that rows must 
-contain a field marked as a primary key.
+`Upsert()` varargs have the same syntax as `Insert()`, however in addition it requires a list of 
+columns to use as the unique constraint check.
+
+## Dealing with schema changes
+
+For minimum disruption, best practice for schema changes (in general, not specifically with Sequel) is
+to write DDL that does not require corresponding DML changes. This means having sane default values for 
+new columns, and the schema change should be applied prior to code deployment. For column removal, 
+code should be modified and deployed prior to schema changes.
+ 
+Some queries are problematic in the face of column additions, in particular the use of `SELECT *`. 
+If an additional column exists in the schema but does not exist in your model, the result rows will 
+fail to deserialise.
+
+There are two options here. 
+
+1. Explicitly list columns in your query.
+2. Use `**`. This automates the approach of explicitly listing column names.
 
 ## Examples
 

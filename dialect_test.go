@@ -134,7 +134,7 @@ func TestDialectExpand(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			for _, result := range test.expected {
 				t.Run(result.dialect.name, func(t *testing.T) {
-					query, args, err := result.dialect.expand(test.query, test.args)
+					query, args, err := result.dialect.expand(nil, test.query, test.args)
 					require.NoError(t, err, "%q", test.query)
 					require.Equal(t, result.query, query)
 					require.Equal(t, result.args, args)
