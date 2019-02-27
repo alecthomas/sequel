@@ -44,7 +44,7 @@ func TestDBSelect(t *testing.T) {
 		err      string
 	}{
 		{name: "SelectNullPointer",
-			query:    `SELECT * FROM users WHERE email = ?`,
+			query:    `SELECT ** FROM users WHERE email = ?`,
 			args:     []interface{}{`moe@stooges.com`},
 			expected: &[]user{moe}},
 		{name: "UnknownColumnName",
@@ -256,22 +256,6 @@ func TestUpsert(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestUnsafe(t *testing.T) {
-	db := databaseFixture(t, sequel.Unsafe())
-	defer db.Close()
-	insertFixtures(t, db)
-
-	type oldModel struct {
-		ID   int
-		Name *string
-	}
-
-	rows := []oldModel{}
-	err := db.Select(&rows, `SELECT * FROM users`)
-	require.NoError(t, err)
-	require.NotEmpty(t, rows)
 }
 
 func databaseFixture(t *testing.T, options ...sequel.Option) *sequel.DB {

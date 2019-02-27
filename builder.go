@@ -1,12 +1,10 @@
 package sequel
 
 import (
-	"reflect"
-	"strings"
-	"time"
-
 	"database/sql"
 	"github.com/pkg/errors"
+	"reflect"
+	"strings"
 )
 
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
@@ -137,29 +135,10 @@ func (b *builder) build(columns []string, types []*sql.ColumnType) (reflect.Valu
 	v := reflect.New(b.t).Elem()
 	for i, column := range columns {
 		field, ok := b.fieldMap[column]
-		if ok {
-			out[i] = v.FieldByIndex(field.index).Addr().Interface()
-			continue
+		if !ok {
+			panic("unmapped field" + column)
 		}
-
-		// Should only hit this in unsafe mode.
-		switch types[i].DatabaseTypeName() {
-		case "VARCHAR", "TEXT", "NVARCHAR", "STRING", "CHARACTER", "VARYING CHARACTER", "NCHAR", "NATIVE CHARACTER", "CLOB":
-			out[i] = new(string)
-		case "NUMERIC", "DECIMAL", "INT", "BIGINT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "UNSIGNED BIG INT", "INT2", "INT8":
-			out[i] = new(int64)
-		case "REAL", "FLOAT", "DOUBLE", "DOUBLE PRECISION":
-			out[i] = new(float64)
-		case "BOOL":
-			out[i] = new(bool)
-		case "DATE", "DATETIME":
-			out[i] = &time.Time{}
-		case "BYTE":
-			b := []byte{}
-			out[i] = &b
-		default:
-			panic("unsupported missing field type " + types[i].DatabaseTypeName())
-		}
+		out[i] = v.FieldByIndex(field.index).Addr().Interface()
 	}
 	return v, out
 }

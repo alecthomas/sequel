@@ -38,13 +38,6 @@ type Interface interface {
 // Option for modifying the behaviour of Sequel.
 type Option func(db *DB)
 
-// Unsafe disables strict checking of column mappings.
-func Unsafe() Option {
-	return func(db *DB) {
-		db.strict = false
-	}
-}
-
 // DB over an existing sql.DB.
 type DB struct {
 	DB *sql.DB
@@ -77,7 +70,6 @@ func New(driver string, db *sql.DB, options ...Option) (*DB, error) {
 		queryable: queryable{
 			db:      db,
 			dialect: dialect,
-			strict:  true,
 		},
 	}
 	for _, opt := range options {
@@ -155,7 +147,6 @@ type commonOps interface {
 type queryable struct {
 	db      commonOps
 	dialect dialect
-	strict  bool
 }
 
 // Expand query and args using Sequel's expansion rules.
@@ -288,9 +279,6 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 		return nil, nil, "", errors.Wrap(err, "failed to retrieve columns")
 	}
 	mapping = fmt.Sprintf("(%s) -> (%s)", strings.Join(columns, ","), strings.Join(builder.fields, ","))
-	if !q.strict {
-		return rows, columns, mapping, nil
-	}
 
 	// Strict checks.
 	fieldMap := map[string]bool{}

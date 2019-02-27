@@ -143,3 +143,13 @@ func TestDialectExpand(t *testing.T) {
 		})
 	}
 }
+
+func TestDialectExpandSelect(t *testing.T) {
+	dest := []TestUser{}
+	builder, err := makeRowBuilderForSlice(&dest)
+	require.NoError(t, err)
+	query, args, err := pqDialect.expand(builder, `SELECT ** FROM test`, nil)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT id, name, email, age FROM test`, query)
+	require.Empty(t, args)
+}
