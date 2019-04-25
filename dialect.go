@@ -11,7 +11,14 @@ import (
 )
 
 var (
-	lexerRegex = regexp.MustCompile("(\\?)|(\\*\\*)|(\\*)|(\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])'|`(?:\\.|[^`])`|[^$*?\"']+)")
+	lexerRegex = regexp.MustCompile(
+		"(\\?)|" +
+			"(\\*\\*)|" +
+			"(\\*)|" +
+			"(\"(?:\\.|[^\"])*\")|" +
+			"('(?:\\.|[^'])*')|" +
+			"(`(?:\\.|[^`])*`)|" +
+			"([^$*?\"']+)")
 
 	dialects = map[string]dialect{
 		"mysql":    mysqlDialect,

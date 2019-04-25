@@ -180,9 +180,9 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 
 // Upsert rows.
 //
-// The given struct must have a field tagged as a primary key.
-//
 // Existing rows will be updated and new rows will be inserted.
+//
+// "keys" must be the list of column names that will trigger a unique constraint violation if an UPDATE is to occur.
 func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sql.Result, error) {
 	if len(rows) == 0 {
 		return nil, errors.Errorf("no rows to update")
