@@ -104,7 +104,7 @@ func (d *dialect) expand(builder *builder, query string, args []interface{}) (st
 				w.WriteString("*")
 			} else {
 				// Wildcard - expand all column names.
-				w.WriteString(strings.Join(builder.fields, ", "))
+				w.WriteString("`" + strings.Join(builder.fields, "`, `") + "`")
 			}
 		default:
 			// Text fragment, output it.

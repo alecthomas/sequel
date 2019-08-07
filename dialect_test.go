@@ -150,6 +150,6 @@ func TestDialectExpandSelect(t *testing.T) {
 	require.NoError(t, err)
 	query, args, err := pqDialect.expand(builder, `SELECT ** FROM test`, nil)
 	require.NoError(t, err)
-	require.Equal(t, `SELECT id, name, email, age FROM test`, query)
+	require.Equal(t, "SELECT `id`, `name`, `email`, `age` FROM test", query)
 	require.Empty(t, args)
 }

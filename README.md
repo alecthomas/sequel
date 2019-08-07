@@ -25,31 +25,36 @@ db, err := sequel.Open("mysql", "root@/database")
 Insert some users:
 
 ```go
-users := []struct{
-    Name string
-    Email string
-}{
-    {"Moe", "moe@stooges.com"},
-    {"Larry", "larry@stooges.com"},
-    {"Curly", "curly@stooges.com"},
+type dbUser struct {
+	ID int       `db:",autopk"`
+	Name string
+	Email string
 }
-err = db.Insert("users", users)
+
+users := []dbUser{
+    {Name: "Moe", Email: "moe@stooges.com"},
+    {Name: "Larry", Email: "larry@stooges.com"},
+    {Name: "Curly", Email: "curly@stooges.com"},
+}
+_, err = db.Exec("INSERT INTO users (:name, :email) VALUES ?", users)
 ```
 
 Selecting uses a similar approach:
 
 ```go
-users := []struct{
-    ID int
-    Name string
-    Email string
-}{}
+users := []dbUser{}
 err = db.Select(&users, `
     SELECT * FROM users WHERE id IN (
         SELECT user_id FROM group_members WHERE group_id = ?
     )
 `, groupID)
 ```
+
+## Directives
+
+### Selectors
+
+### Placeholders
 
 ## Placeholder expansion rules
 
@@ -66,9 +71,20 @@ Value                                           | Placeholder | Corresponding ex
 `[]struct{A, B string}{{"A", "B"}, {"C", "D"}}` | `?`         | `(?, ?), (?, ?)`
 `struct{A, B, C string}{"A", "B", "C"}`         | `**`        | `a, b, c`
 
+## Struct tag format
+
+Struct fields may be tagged with `db:"..."` to control how Sequel maps fields. The tag has the following
+syntax:
+
+    db:"<name>[,autopk]"
+    
+Tag option    | Meaning
+--------------|----------------------------------------
+`autopk`      | Field is an auto-incrementing pk. This informs `Insert()` which fields should not be propagated.
+
 ## Insert
 
-The `Insert()` method accepts a list of rows (`Insert(table, rows)`), or a vararg 
+It accepts a list of rows (`Insert(table, rows)`), or a vararg 
 sequence (`Insert(table, row0, row1, row2)`). Column names are reflected from the first row.
 
 ## Upsert
