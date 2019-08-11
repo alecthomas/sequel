@@ -12,7 +12,7 @@ type TestMetadata struct {
 }
 
 type TestUser struct {
-	ID   int
+	ID   int `db:",managed"`
 	Name string
 	TestMetadata
 }
@@ -134,7 +134,7 @@ func TestDialectExpand(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			for _, result := range test.expected {
 				t.Run(result.dialect.name, func(t *testing.T) {
-					query, args, err := result.dialect.expand(nil, test.query, test.args)
+					query, args, err := result.dialect.expand(true, nil, test.query, test.args)
 					require.NoError(t, err, "%q", test.query)
 					require.Equal(t, result.query, query)
 					require.Equal(t, result.args, args)
@@ -148,7 +148,7 @@ func TestDialectExpandSelect(t *testing.T) {
 	dest := []TestUser{}
 	builder, err := makeRowBuilderForSlice(&dest)
 	require.NoError(t, err)
-	query, args, err := pqDialect.expand(builder, `SELECT ** FROM test`, nil)
+	query, args, err := pqDialect.expand(true, builder, `SELECT ** FROM test`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT `id`, `name`, `email`, `age` FROM test", query)
 	require.Empty(t, args)

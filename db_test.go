@@ -17,13 +17,13 @@ type userData struct {
 }
 
 type user struct {
-	ID    int `db:"id"`
+	ID    int `db:"id,pk,managed"`
 	Name  sql.NullString
 	Email string
 }
 
 type invalidUser struct {
-	ID   int
+	ID   int `db:"id,pk,managed"`
 	Name sql.NullString
 	Mail string
 }
@@ -171,41 +171,38 @@ func TestCommitOrRollbackOnError(t *testing.T) {
 
 func TestInsert(t *testing.T) {
 	tests := []struct {
-		name          string
-		value         interface{}
-		err           bool
-		expectedID    int64
-		expectedCount int64
+		name        string
+		value       interface{}
+		err         bool
+		expectedIDs []int64
+		expected    interface{}
 	}{
-		{name: "ValidWithPK", value: user{ID: 1, Email: "larry@stooges.com"}, expectedID: 1},
+		{name: "ValidWithPK", value: user{ID: 2, Email: "larry@stooges.com"}, expectedIDs: []int64{1}},
 		{name: "InvalidColumn", value: invalidUser{}, err: true},
-		{name: "PartialInsertWithAutoIncrementID", value: userData{Email: "moe@stooges.com"}, expectedID: 1},
-		{name: "MultiplePartialInserts", value: []userData{
-			userData{Email: "moe@stooges.com"},
-			userData{Email: "larry@stooges.com"},
-		}, expectedCount: 2, expectedID: 2},
+		{name: "PartialInsertWithAutoIncrementID",
+			value:       &user{Email: "moe@stooges.com"},
+			expectedIDs: []int64{1},
+			expected:    &user{ID: 1, Email: "moe@stooges.com"}},
+		{name: "MultiplePartialInserts", value: []user{
+			{Email: "moe@stooges.com"},
+			{Email: "larry@stooges.com"},
+		}, expectedIDs: []int64{1, 2}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			db := databaseFixture(t)
 			defer db.Close()
 
-			res, err := db.Exec("INSERT INTO users (**) VALUES ?", test.value)
+			ids, err := db.Insert("users", test.value)
 			if test.err {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				rows, err := res.RowsAffected()
-				require.NoError(t, err)
-				expectedCount := test.expectedCount
-				if expectedCount == 0 {
-					expectedCount = 1
+				if test.expectedIDs != nil {
+					require.Equal(t, test.expectedIDs, ids)
 				}
-				require.Equal(t, rows, expectedCount)
-				if test.expectedID != 0 {
-					id, err := res.LastInsertId()
-					require.NoError(t, err)
-					require.Equal(t, test.expectedID, id)
+				if test.expected != nil {
+					require.Equal(t, test.expected, test.value)
 				}
 			}
 		})

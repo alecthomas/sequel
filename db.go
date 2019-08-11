@@ -5,28 +5,17 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/pkg/errors"
-)
-
-var (
-	scannerType   = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
-	timeType      = reflect.TypeOf(time.Time{})
-	byteSliceType = reflect.TypeOf([]byte{})
-
-	// Cache of row builders.
-	rowBuilderCache = map[reflect.Type]*builder{}
-	rowBuilderLock  sync.Mutex
 )
 
 // Interface common to raw database connection and transactions.
 //
 // See DB or Transaction for documentation.
 type Interface interface {
+	Insert(table string, rows ...interface{}) ([]int64, error)
 	Upsert(table string, keys []string, rows ...interface{}) (sql.Result, error)
-	Expand(query string, args ...interface{}) (string, []interface{}, error)
+	Expand(query string, withManaged bool, args ...interface{}) (string, []interface{}, error)
 	Exec(query string, args ...interface{}) (res sql.Result, err error)
 	Select(slice interface{}, query string, args ...interface{}) (err error)
 	SelectOne(ref interface{}, query string, args ...interface{}) error
@@ -138,26 +127,31 @@ func (t *Transaction) CommitOrRollbackOnError(err *error) {
 }
 
 // Operations common between sql.DB and sql.Tx.
-type commonOps interface {
+type sqlOps interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 	Query(query string, args ...interface{}) (*sql.Rows, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
 }
 
 type queryable struct {
-	db      commonOps
+	db      sqlOps
 	dialect dialect
 }
 
 // Expand query and args using Sequel's expansion rules.
 //
 // The resulting query and args can be used directly with any sql.DB.
-func (q *queryable) Expand(query string, args ...interface{}) (string, []interface{}, error) {
+//
+// If "withManaged" is true then any ** expansion will include fields managed by the database,
+// eg. auto-increment or on-update columns.
+//
+// Returns the expanded query and args, or an error.
+func (q *queryable) Expand(query string, withManaged bool, args ...interface{}) (string, []interface{}, error) {
 	builder, err := makeRowBuilderForSliceOfInterface(args)
 	if err != nil {
 		return "", nil, err
 	}
-	return q.dialect.expand(builder, query, args)
+	return q.dialect.expand(withManaged, builder, query, args)
 }
 
 // Exec an SQL statement and ignore the result.
@@ -166,7 +160,7 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 	if err != nil {
 		return nil, err
 	}
-	query, args, err = q.dialect.expand(builder, query, args)
+	query, args, err = q.dialect.expand(true, builder, query, args)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -178,6 +172,55 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 	return result, nil
 }
 
+// Insert rows.
+//
+// It accepts a list of rows ("Insert(table, rows)"), or a vararg sequence
+// ("Insert(table, row0, row1, row2)"). Column names are reflected from the first row.
+//
+// Any fields marked with "managed" will not be set during insertion.
+//
+// Will return IDs of generated rows if applicable, or nil if not supported.
+// Finally, for structs with PKs, those PKs will be updated.
+func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
+	if len(rows) == 0 {
+		return nil, errors.Errorf("no rows to update")
+	}
+	arg, count, t, slice := q.typeForMutationRows(rows...)
+	builder, err := makeRowBuilderForType(t)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to map type %s", t)
+	}
+	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
+		q.dialect.quoteID(table),
+		quoteAndJoinIDs(q.dialect.quoteID, builder.filteredFields(false)))
+	query, args, err := q.dialect.expand(false, builder, query, []interface{}{arg})
+	if err != nil {
+		return nil, err
+	}
+	result, err := q.db.Exec(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to execute %q", query)
+	}
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return nil, nil
+	}
+	ids := make([]int64, 0, count)
+	for i := 0; i < slice.Len(); i++ {
+		id := lastID - int64(count) + 1 + int64(i)
+		ids = append(ids, id)
+		if builder.pk != "" {
+			f := builder.fieldMap[builder.pk]
+			row := indirectValue(slice.Index(i))
+			rf := row.FieldByIndex(f.index)
+			if rf.CanSet() {
+				rf.SetInt(id)
+			}
+		}
+	}
+	return ids, nil
+}
+
 // Upsert rows.
 //
 // Existing rows will be updated and new rows will be inserted.
@@ -187,23 +230,34 @@ func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sq
 	if len(rows) == 0 {
 		return nil, errors.Errorf("no rows to update")
 	}
-	arg, t := q.typeForMutationRows(rows...)
+	arg, _, t, _ := q.typeForMutationRows(rows...)
 	builder, err := makeRowBuilderForType(t)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
-	sql := q.dialect.upsert(table, keys, builder)
-	return q.Exec(sql, arg)
+	query := q.dialect.upsert(table, keys, builder)
+	query, args, err := q.dialect.expand(true, builder, query, []interface{}{arg})
+	if err != nil {
+		return nil, err
+	}
+	return q.db.Exec(query, args...)
 }
 
-func (q *queryable) typeForMutationRows(rows ...interface{}) (arg interface{}, t reflect.Type) {
+func (q *queryable) typeForMutationRows(rows ...interface{}) (arg interface{}, count int, t reflect.Type, slice reflect.Value) {
 	arg = rows
+	count = len(rows)
 	t = reflect.TypeOf(rows[0])
+	slice = reflect.ValueOf(rows)
 	if len(rows) == 1 {
 		if t.Kind() == reflect.Slice {
+			slice = reflect.ValueOf(rows[0])
 			t = t.Elem()
 		}
-		arg = reflect.ValueOf(rows[0]).Interface()
+		first := reflect.ValueOf(rows[0])
+		arg = first.Interface()
+		if first.Kind() == reflect.Slice {
+			count = first.Len()
+		}
 	}
 	return
 }
@@ -241,7 +295,7 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 //
 // Will return sql.ErrNoRows if no rows are returned.
 func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}) error {
-	builder, err := makeRowBuilder(ref)
+	builder, err := makeRowBuilder(ref, true)
 	if err != nil {
 		return errors.Wrapf(err, "failed to map type %T", ref)
 	}
@@ -265,7 +319,7 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 }
 
 func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
-	query, args, err = q.dialect.expand(builder, query, args)
+	query, args, err = q.dialect.expand(true, builder, query, args)
 	if err != nil {
 		return nil, nil, "", errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -300,7 +354,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 
 // SelectScalar selects a single column row into value.
 func (q *queryable) SelectScalar(value interface{}, query string, args ...interface{}) (err error) {
-	query, args, err = q.dialect.expand(nil, query, args)
+	query, args, err = q.dialect.expand(true, nil, query, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to expand query %q", query)
 	}

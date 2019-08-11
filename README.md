@@ -26,7 +26,8 @@ Insert some users:
 
 ```go
 type dbUser struct {
-	ID int       `db:",autopk"`
+	ID int            `db:",managed"`
+    Created time.Time `db:",managed"`
 	Name string
 	Email string
 }
@@ -36,7 +37,7 @@ users := []dbUser{
     {Name: "Larry", Email: "larry@stooges.com"},
     {Name: "Curly", Email: "curly@stooges.com"},
 }
-_, err = db.Exec("INSERT INTO users (:name, :email) VALUES ?", users)
+_, err = db.Exec("INSERT INTO users ** VALUES ?", users)
 ```
 
 Selecting uses a similar approach:
@@ -76,11 +77,15 @@ Value                                           | Placeholder | Corresponding ex
 Struct fields may be tagged with `db:"..."` to control how Sequel maps fields. The tag has the following
 syntax:
 
-    db:"<name>[,autopk]"
+    db:"<name>[,managed,pk]"
+    
+If omitted, the lower-snake-case mapping of the Go field name will be used.
+eg. `MyIDField` -> `my_id_field`.
     
 Tag option    | Meaning
 --------------|----------------------------------------
-`autopk`      | Field is an auto-incrementing pk. This informs `Insert()` which fields should not be propagated.
+`managed`     | Field is managed by the database. This informs `Insert()` which fields should not be propagated.
+`pk`          | Field is the primary key. Auto-increment fields should also be tagged as `managed`.
 
 ## Insert
 

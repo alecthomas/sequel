@@ -2,13 +2,26 @@ package sequel
 
 import (
 	"database/sql"
-	"github.com/pkg/errors"
 	"reflect"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/pkg/errors"
+)
+
+var (
+	scannerType   = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
+	timeType      = reflect.TypeOf(time.Time{})
+	byteSliceType = reflect.TypeOf([]byte{})
+
+	// Cache of row builders.
+	rowBuilderCache = map[reflect.Type]*builder{}
+	rowBuilderLock  sync.RWMutex
 )
 
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
-func makeRowBuilder(v interface{}) (*builder, error) {
+func makeRowBuilder(v interface{}, withManaged bool) (*builder, error) {
 	t := reflect.TypeOf(v)
 	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
 		return nil, errors.Errorf("can only scan into pointer to struct, not %s", t)
@@ -39,10 +52,35 @@ func makeRowBuilderForSliceOfInterface(slice []interface{}) (*builder, error) {
 	return nil, nil
 }
 
+func indirectType(t reflect.Type) reflect.Type {
+	switch t.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		return indirectType(t.Elem())
+	}
+	return t
+}
+
+func indirectValue(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		return indirectValue(v.Elem())
+	}
+	return v
+}
+
 func makeRowBuilderForType(t reflect.Type) (*builder, error) {
+	t = indirectType(t)
 	if t.Kind() != reflect.Struct {
 		return nil, errors.Errorf("can only build rows for structs not %s", t)
 	}
+	rowBuilderLock.RLock()
+	if builder, ok := rowBuilderCache[t]; ok {
+		rowBuilderLock.RUnlock()
+		return builder, nil
+	}
+	rowBuilderLock.RUnlock()
+
+	// Upgrade and check it again :\
 	rowBuilderLock.Lock()
 	defer rowBuilderLock.Unlock()
 	if builder, ok := rowBuilderCache[t]; ok {
@@ -55,11 +93,22 @@ func makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	}
 	fieldMap := map[string]field{}
 	fieldNames := []string{}
+	pk := ""
 	for _, field := range fields {
+		if field.pk {
+			pk = field.name
+		}
 		fieldNames = append(fieldNames, field.name)
 		fieldMap[field.name] = field
 	}
-	return &builder{t: t, fields: fieldNames, fieldMap: fieldMap}, nil
+	b := &builder{
+		t:        t,
+		fields:   fieldNames,
+		fieldMap: fieldMap,
+		pk:       pk,
+	}
+	rowBuilderCache[t] = b
+	return b, nil
 }
 
 func collectFieldIndexes(t reflect.Type) ([]field, error) {
@@ -69,7 +118,11 @@ func collectFieldIndexes(t reflect.Type) ([]field, error) {
 		ft := f.Type
 
 		if ft == timeType || ft == byteSliceType || ft.Implements(scannerType) || reflect.PtrTo(ft).Implements(scannerType) {
-			out = append(out, parseField(f, []int{i}))
+			fld, err := parseField(f, []int{i})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, fld)
 			continue
 		}
 
@@ -91,34 +144,64 @@ func collectFieldIndexes(t reflect.Type) ([]field, error) {
 			return nil, errors.Errorf("can't select into slice field \"%s %s\"", f.Name, ft)
 
 		default:
-			out = append(out, parseField(f, []int{i}))
+			fld, err := parseField(f, []int{i})
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, fld)
 		}
 	}
 
 	return out, nil
 }
 
-func parseField(f reflect.StructField, index []int) field {
-	name := strings.ToLower(f.Name)
+func parseField(f reflect.StructField, index []int) (field, error) {
+	name := strings.ToLower(strings.Join(camelCase(f.Name), "_"))
 	tag, ok := f.Tag.Lookup("db")
-	if ok {
-		parts := strings.Split(tag, ",")
-		if parts[0] != "" {
-			name = parts[0]
+	out := field{name: name, index: index}
+	if !ok {
+		return out, nil
+	}
+
+	parts := strings.Split(tag, ",")
+	if parts[0] != "" {
+		out.name = parts[0]
+	}
+	for _, part := range parts[1:] {
+		switch part {
+		case "managed":
+			out.managed = true
+		case "pk":
+			out.pk = true
+		default:
+			return field{}, errors.Errorf("field %s: invalid tag attribute %q", f.Name, part)
 		}
 	}
-	return field{name: name, index: index}
+	return out, nil
 }
 
 type field struct {
-	name  string
-	index []int
+	name    string
+	index   []int
+	managed bool
+	pk      bool
 }
 
 type builder struct {
+	pk       string
 	t        reflect.Type
 	fields   []string
 	fieldMap map[string]field
+}
+
+func (b *builder) filteredFields(withManaged bool) []string {
+	out := make([]string, 0, len(b.fields))
+	for _, field := range b.fields {
+		if withManaged || !b.fieldMap[field].managed {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 func (b *builder) fill(v interface{}, columns []string) (out []interface{}) {
