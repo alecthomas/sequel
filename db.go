@@ -282,11 +282,15 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 		return errors.Wrap(err, "failed to retrieve result column types")
 	}
 	out := reflect.ValueOf(slice).Elem()
+	addrElem := out.Type().Elem().Kind() == reflect.Ptr
 	for rows.Next() {
 		el, values := builder.build(columns, types)
 		err = rows.Scan(values...)
 		if err != nil {
 			return errors.Wrap(err, mapping)
+		}
+		if addrElem {
+			el = el.Addr()
 		}
 		out = reflect.Append(out, el)
 	}

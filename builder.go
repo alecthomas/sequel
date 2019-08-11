@@ -32,7 +32,7 @@ func makeRowBuilder(v interface{}, withManaged bool) (*builder, error) {
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
 func makeRowBuilderForSlice(slice interface{}) (*builder, error) {
 	t := reflect.TypeOf(slice)
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Slice || t.Elem().Elem().Kind() != reflect.Struct {
+	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Slice || indirectType(t.Elem().Elem()).Kind() != reflect.Struct {
 		return nil, errors.Errorf("expected a pointer to a slice of structs but got %T", slice)
 	}
 	t = t.Elem().Elem()

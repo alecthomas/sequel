@@ -75,6 +75,13 @@ func TestDBSelect(t *testing.T) {
 			},
 			dest:     &[]user{},
 			expected: &[]user{moe, curly}},
+		{name: "IntoSliceOfPointers",
+			query: "SELECT * FROM users WHERE email IN (?)",
+			args: []interface{}{
+				[]string{"curly@stooges.com", "moe@stooges.com"},
+			},
+			dest:     &[]*user{},
+			expected: &[]*user{&moe, &curly}},
 	}
 
 	for _, test := range tests {
