@@ -190,6 +190,9 @@ func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
+	if builder.pk != "" && slice.Type().Elem().Kind() == reflect.Struct {
+		return nil, errors.Errorf("can't set PK of %s, must be []*%s", slice.Type(), slice.Type().Elem())
+	}
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
 		q.dialect.quoteID(table),
 		quoteAndJoinIDs(q.dialect.quoteID, builder.filteredFields(false)))

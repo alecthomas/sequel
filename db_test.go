@@ -183,7 +183,7 @@ func TestInsert(t *testing.T) {
 			value:       &user{Email: "moe@stooges.com"},
 			expectedIDs: []int64{1},
 			expected:    &user{ID: 1, Email: "moe@stooges.com"}},
-		{name: "MultiplePartialInserts", value: []user{
+		{name: "MultiplePartialInserts", value: []*user{
 			{Email: "moe@stooges.com"},
 			{Email: "larry@stooges.com"},
 		}, expectedIDs: []int64{1, 2}},
