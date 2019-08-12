@@ -184,8 +184,8 @@ func TestInsert(t *testing.T) {
 		expectedIDs []int64
 		expected    interface{}
 	}{
-		{name: "ValidWithPK", value: user{ID: 2, Email: "larry@stooges.com"}, expectedIDs: []int64{1}},
-		{name: "InvalidColumn", value: invalidUser{}, err: true},
+		{name: "ValidWithPK", value: &user{ID: 2, Email: "larry@stooges.com"}, expectedIDs: []int64{1}},
+		{name: "InvalidColumn", value: &invalidUser{}, err: true},
 		{name: "PartialInsertWithAutoIncrementID",
 			value:       &user{Email: "moe@stooges.com"},
 			expectedIDs: []int64{1},

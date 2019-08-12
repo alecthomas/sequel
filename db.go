@@ -185,51 +185,7 @@ func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
 	if len(rows) == 0 {
 		return nil, errors.Errorf("no rows to update")
 	}
-	arg, count, t, slice := q.typeForMutationRows(rows...)
-	builder, err := makeRowBuilderForType(t)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to map type %s", t)
-	}
-	if builder.pk != "" && slice.Type().Elem().Kind() == reflect.Struct {
-		return nil, errors.Errorf("can't set PK of %s, must be []*%s", slice.Type(), slice.Type().Elem())
-	}
-	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
-		q.dialect.QuoteID(table),
-		quoteAndJoinIDs(q.dialect.QuoteID, builder.filteredFields(false)))
-	query, args, err := expand(q.dialect, false, builder, query, []interface{}{arg})
-	if err != nil {
-		return nil, err
-	}
-	result, err := q.db.Exec(query, args...)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to execute %q", query)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to count affected rows")
-	}
-	if affected != int64(count) {
-		return nil, errors.Errorf("affected rows %d did not match row count of %d", affected, count)
-	}
-	lastID, err := result.LastInsertId()
-	if err != nil {
-		return nil, nil
-	}
-	ids := make([]int64, 0, count)
-	base := lastID - int64(count)
-	for i := 0; i < slice.Len(); i++ {
-		id := base + 1 + int64(i)
-		ids = append(ids, id)
-		if builder.pk != "" {
-			f := builder.fieldMap[builder.pk]
-			row := indirectValue(slice.Index(i))
-			rf := row.FieldByIndex(f.index)
-			if rf.CanSet() {
-				rf.SetInt(id)
-			}
-		}
-	}
-	return ids, nil
+	return q.dialect.Insert(q.db, table, rows)
 }
 
 // Upsert rows.
@@ -241,7 +197,7 @@ func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sq
 	if len(rows) == 0 {
 		return nil, errors.Errorf("no rows to update")
 	}
-	arg, _, t, _ := q.typeForMutationRows(rows...)
+	arg, _, t, _ := typeForMutationRows(rows...)
 	builder, err := makeRowBuilderForType(t)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to map type %s", t)
@@ -254,7 +210,7 @@ func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sq
 	return q.db.Exec(query, args...)
 }
 
-func (q *queryable) typeForMutationRows(rows ...interface{}) (arg interface{}, count int, t reflect.Type, slice reflect.Value) {
+func typeForMutationRows(rows ...interface{}) (arg interface{}, count int, t reflect.Type, slice reflect.Value) {
 	arg = rows
 	count = len(rows)
 	t = reflect.TypeOf(rows[0])

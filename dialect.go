@@ -21,9 +21,17 @@ var (
 			"([^$*?\"']+)")
 
 	dialects = map[string]dialect{
-		"mysql":    &mysqlDialect{},
+		"mysql": func() dialect {
+			d := &mysqlDialect{lastInsertMixin{idIsFirst: true}}
+			d.d = d
+			return d
+		}(),
 		"postgres": &pqDialect{ansiDialect{name: "postgres"}},
-		"sqlite3":  &ansiDialect{name: "sqlite3"},
+		"sqlite3": func() dialect {
+			d := &sqliteDialect{ansiDialect{name: "sqlite3"}, lastInsertMixin{}}
+			d.d = d
+			return d
+		}(),
 	}
 )
 
@@ -34,13 +42,87 @@ var (
 // 		"SELECT * FROM users WHERE id = ? OR name = ?"
 type dialect interface {
 	Name() string
+	// Quote a table or column identifier.
 	QuoteID(s string) string
+	// Return the dialect-specific placeholder string for parameter "n".
 	Placeholder(n int) string
+	// Constructs an upsert statement.
+	//
+	// Must return a statement with a single ? where values will be inserted.
 	Upsert(table string, keys []string, builder *builder) string
-	Insert(ops sqlOps, table string, builder *builder) ([]int64, error)
+	// Insert rows, returning the IDs inserted.
+	Insert(ops sqlOps, table string, rows []interface{}) ([]int64, error)
 }
 
-type mysqlDialect struct{}
+type lastInsertMixin struct {
+	d         dialect
+	idIsFirst bool // MySQL returns the FIRST inserted ID ... because why wouldn't it.
+}
+
+func (l *lastInsertMixin) Insert(ops sqlOps, table string, rows []interface{}) ([]int64, error) {
+	arg, count, t, slice := typeForMutationRows(rows...)
+	builder, err := makeRowBuilderForType(t)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to map type %s", t)
+	}
+	elem := slice.Index(0)
+	if elem.Kind() == reflect.Interface {
+		elem = elem.Elem()
+	}
+	if builder.pk != "" && elem.Kind() == reflect.Struct {
+		return nil, errors.Errorf("can't set PK on value %s, must be *%s", elem.Type(), elem.Type())
+	}
+	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
+		l.d.QuoteID(table),
+		quoteAndJoinIDs(l.d.QuoteID, builder.filteredFields(false)))
+	query, args, err := expand(l.d, false, builder, query, []interface{}{arg})
+	if err != nil {
+		return nil, err
+	}
+	result, err := ops.Exec(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to execute %q", query)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to count affected rows")
+	}
+	if affected != int64(count) {
+		return nil, errors.Errorf("affected rows %d did not match row count of %d", affected, count)
+	}
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return nil, nil
+	}
+	ids := make([]int64, 0, count)
+	if l.idIsFirst {
+		for i := 0; i < count; i++ {
+			ids = append(ids, int64(i)+lastID)
+		}
+	} else {
+		base := lastID - int64(count)
+		for i := 0; i < count; i++ {
+			id := base + 1 + int64(i)
+			ids = append(ids, id)
+		}
+	}
+
+	// Set IDs on the rows.
+	if builder.pk != "" {
+		for i := 0; i < slice.Len(); i++ {
+			f := builder.fieldMap[builder.pk]
+			row := indirectValue(slice.Index(i))
+			rf := row.FieldByIndex(f.index)
+			rf.SetInt(ids[i])
+		}
+	}
+
+	return ids, nil
+}
+
+type mysqlDialect struct {
+	lastInsertMixin
+}
 
 func (m *mysqlDialect) Name() string             { return "mysql" }
 func (m *mysqlDialect) QuoteID(s string) string  { return quoteBacktick(s) }
@@ -58,10 +140,6 @@ func (m *mysqlDialect) Upsert(table string, keys []string, builder *builder) str
 		quoteBacktick(table),
 		quoteAndJoinIDs(quoteBacktick, builder.filteredFields(true)),
 		quoteAndJoinIDs(quoteBacktick, set))
-}
-
-func (m *mysqlDialect) Insert(ops sqlOps, table string, builder *builder) ([]int64, error) {
-	panic("implement me")
 }
 
 type ansiDialect struct {
@@ -87,15 +165,17 @@ func (a *ansiDialect) Upsert(table string, keys []string, builder *builder) stri
 		quoteAndJoinIDs(quoteBacktick, keys), strings.Join(set, ", "))
 }
 
-func (a *ansiDialect) Insert(ops sqlOps, table string, builder *builder) ([]int64, error) {
-	panic("implement me")
+type sqliteDialect struct {
+	ansiDialect
+	lastInsertMixin
 }
 
-type pqDialect struct {
-	ansiDialect
-}
+type pqDialect struct{ ansiDialect }
 
 func (p *pqDialect) Placeholder(n int) string { return fmt.Sprintf("$%d", n+1) }
+func (p *pqDialect) Insert(ops sqlOps, table string, rows []interface{}) ([]int64, error) {
+	panic("not implemented")
+}
 
 func quoteBacktick(s string) string {
 	s = strings.ReplaceAll(s, "`", "``")
