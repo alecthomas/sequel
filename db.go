@@ -151,7 +151,7 @@ func (q *queryable) Expand(query string, withManaged bool, args ...interface{}) 
 	if err != nil {
 		return "", nil, err
 	}
-	return q.dialect.expand(withManaged, builder, query, args)
+	return expand(q.dialect, withManaged, builder, query, args)
 }
 
 // Exec an SQL statement and ignore the result.
@@ -160,7 +160,7 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 	if err != nil {
 		return nil, err
 	}
-	query, args, err = q.dialect.expand(true, builder, query, args)
+	query, args, err = expand(q.dialect, true, builder, query, args)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -194,9 +194,9 @@ func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
 		return nil, errors.Errorf("can't set PK of %s, must be []*%s", slice.Type(), slice.Type().Elem())
 	}
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
-		q.dialect.quoteID(table),
-		quoteAndJoinIDs(q.dialect.quoteID, builder.filteredFields(false)))
-	query, args, err := q.dialect.expand(false, builder, query, []interface{}{arg})
+		q.dialect.QuoteID(table),
+		quoteAndJoinIDs(q.dialect.QuoteID, builder.filteredFields(false)))
+	query, args, err := expand(q.dialect, false, builder, query, []interface{}{arg})
 	if err != nil {
 		return nil, err
 	}
@@ -204,13 +204,21 @@ func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to execute %q", query)
 	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to count affected rows")
+	}
+	if affected != int64(count) {
+		return nil, errors.Errorf("affected rows %d did not match row count of %d", affected, count)
+	}
 	lastID, err := result.LastInsertId()
 	if err != nil {
 		return nil, nil
 	}
 	ids := make([]int64, 0, count)
+	base := lastID - int64(count)
 	for i := 0; i < slice.Len(); i++ {
-		id := lastID - int64(count) + 1 + int64(i)
+		id := base + 1 + int64(i)
 		ids = append(ids, id)
 		if builder.pk != "" {
 			f := builder.fieldMap[builder.pk]
@@ -238,8 +246,8 @@ func (q *queryable) Upsert(table string, keys []string, rows ...interface{}) (sq
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to map type %s", t)
 	}
-	query := q.dialect.upsert(table, keys, builder)
-	query, args, err := q.dialect.expand(true, builder, query, []interface{}{arg})
+	query := q.dialect.Upsert(table, keys, builder)
+	query, args, err := expand(q.dialect, true, builder, query, []interface{}{arg})
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +334,7 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 }
 
 func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
-	query, args, err = q.dialect.expand(true, builder, query, args)
+	query, args, err = expand(q.dialect, true, builder, query, args)
 	if err != nil {
 		return nil, nil, "", errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -361,7 +369,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 
 // SelectScalar selects a single column row into value.
 func (q *queryable) SelectScalar(value interface{}, query string, args ...interface{}) (err error) {
-	query, args, err = q.dialect.expand(true, nil, query, args)
+	query, args, err = expand(q.dialect, true, nil, query, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to expand query %q", query)
 	}

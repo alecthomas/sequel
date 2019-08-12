@@ -21,38 +21,31 @@ var (
 			"([^$*?\"']+)")
 
 	dialects = map[string]dialect{
-		"mysql":    mysqlDialect,
-		"postgres": pqDialect,
-		"sqlite3":  sqliteDialect,
-	}
-
-	// Dialects.
-	mysqlDialect = dialect{
-		name:       "mysql",
-		quoteID:    quoteBacktick,
-		sequential: func(int) string { return "?" },
-		upsert:     mysqlUpsert,
-	}
-	pqDialect = dialect{
-		name:       "postgres",
-		quoteID:    quoteBacktick,
-		sequential: func(n int) string { return fmt.Sprintf("$%d", n+1) },
-		upsert:     pqUpsert,
-	}
-	sqliteDialect = dialect{
-		name:       "sqlite3",
-		quoteID:    quoteBacktick,
-		sequential: func(int) string { return "?" },
-		upsert:     pqUpsert,
+		"mysql":    &mysqlDialect{},
+		"postgres": &pqDialect{ansiDialect{name: "postgres"}},
+		"sqlite3":  &ansiDialect{name: "sqlite3"},
 	}
 )
 
-func quoteBacktick(s string) string {
-	s = strings.ReplaceAll(s, "`", "``")
-	return "`" + s + "`"
+// A dialect knows how to perform SQL dialect specific operations.
+//
+// eg. ? expansion
+//
+// 		"SELECT * FROM users WHERE id = ? OR name = ?"
+type dialect interface {
+	Name() string
+	QuoteID(s string) string
+	Placeholder(n int) string
+	Upsert(table string, keys []string, builder *builder) string
+	Insert(ops sqlOps, table string, builder *builder) ([]int64, error)
 }
 
-func mysqlUpsert(table string, keys []string, builder *builder) string {
+type mysqlDialect struct{}
+
+func (m *mysqlDialect) Name() string             { return "mysql" }
+func (m *mysqlDialect) QuoteID(s string) string  { return quoteBacktick(s) }
+func (m *mysqlDialect) Placeholder(n int) string { return "?" }
+func (m *mysqlDialect) Upsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.filteredFields(true) {
 		set = append(set, fmt.Sprintf("%s = VALUE(%s)",
@@ -67,7 +60,18 @@ func mysqlUpsert(table string, keys []string, builder *builder) string {
 		quoteAndJoinIDs(quoteBacktick, set))
 }
 
-func pqUpsert(table string, keys []string, builder *builder) string {
+func (m *mysqlDialect) Insert(ops sqlOps, table string, builder *builder) ([]int64, error) {
+	panic("implement me")
+}
+
+type ansiDialect struct {
+	name string
+}
+
+func (a *ansiDialect) Name() string             { return a.name }
+func (a *ansiDialect) QuoteID(s string) string  { return quoteBacktick(s) }
+func (a *ansiDialect) Placeholder(n int) string { return "?" }
+func (a *ansiDialect) Upsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.filteredFields(true) {
 		set = append(set, fmt.Sprintf("%s = excluded.%s",
@@ -83,6 +87,21 @@ func pqUpsert(table string, keys []string, builder *builder) string {
 		quoteAndJoinIDs(quoteBacktick, keys), strings.Join(set, ", "))
 }
 
+func (a *ansiDialect) Insert(ops sqlOps, table string, builder *builder) ([]int64, error) {
+	panic("implement me")
+}
+
+type pqDialect struct {
+	ansiDialect
+}
+
+func (p *pqDialect) Placeholder(n int) string { return fmt.Sprintf("$%d", n+1) }
+
+func quoteBacktick(s string) string {
+	s = strings.ReplaceAll(s, "`", "``")
+	return "`" + s + "`"
+}
+
 func quoteAndJoinIDs(quoteID func(s string) string, ids []string) string {
 	out := make([]string, len(ids))
 	for i, id := range ids {
@@ -91,18 +110,8 @@ func quoteAndJoinIDs(quoteID func(s string) string, ids []string) string {
 	return strings.Join(out, ", ")
 }
 
-// A dialect knows how to map Sequel placeholders to dialect-specific placeholders.
-//
-// 		"SELECT * FROM users WHERE id = ? OR name = ?"
-type dialect struct {
-	name       string
-	quoteID    func(string) string
-	sequential func(n int) string // Sequential placeholder.
-	upsert     func(table string, keys []string, builder *builder) string
-}
-
 // Expand a query and arguments using the Sequel recursive expansion rules.
-func (d *dialect) expand(withManaged bool, builder *builder, query string, args []interface{}) (string, []interface{}, error) {
+func expand(d dialect, withManaged bool, builder *builder, query string, args []interface{}) (string, []interface{}, error) {
 	// Fragments of text making up the final statement.
 	w := &strings.Builder{}
 	out := []interface{}{}
@@ -118,7 +127,7 @@ func (d *dialect) expand(withManaged bool, builder *builder, query string, args 
 			// Newly seen argument, expand and cache it.
 			arg := args[argi]
 			v := reflect.ValueOf(arg)
-			parameterArgs, err := d.expandParameter(withManaged, true, w, &outIndex, v)
+			parameterArgs, err := expandParameter(d, withManaged, true, w, &outIndex, v)
 			if err != nil {
 				return "", nil, err
 			}
@@ -129,7 +138,7 @@ func (d *dialect) expand(withManaged bool, builder *builder, query string, args 
 				w.WriteString("*")
 			} else {
 				// Wildcard - expand all column names.
-				w.WriteString(quoteAndJoinIDs(d.quoteID, builder.fields))
+				w.WriteString(quoteAndJoinIDs(d.QuoteID, builder.fields))
 			}
 		default:
 			// Text fragment, output it.
@@ -143,12 +152,12 @@ func (d *dialect) expand(withManaged bool, builder *builder, query string, args 
 // Expand a single parameter.
 //
 // Parentheses will enclose struct fields and slice elements unless "root" is true.
-func (d *dialect) expandParameter(withManaged, wrap bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, err error) {
+func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, err error) {
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.String, reflect.Float32, reflect.Float64:
-		w.WriteString(d.sequential(*index))
+		w.WriteString(d.Placeholder(*index))
 		*index++
 		return []interface{}{v.Interface()}, nil
 
@@ -157,7 +166,7 @@ func (d *dialect) expandParameter(withManaged, wrap bool, w *strings.Builder, in
 			if i > 0 {
 				w.WriteString(", ")
 			}
-			children, err := d.expandParameter(withManaged, wrap, w, index, v.Index(i))
+			children, err := expandParameter(d, withManaged, wrap, w, index, v.Index(i))
 			if err != nil {
 				return nil, err
 			}
@@ -166,7 +175,7 @@ func (d *dialect) expandParameter(withManaged, wrap bool, w *strings.Builder, in
 
 	case reflect.Struct:
 		if _, ok := v.Interface().(driver.Valuer); ok {
-			w.WriteString(d.sequential(*index))
+			w.WriteString(d.Placeholder(*index))
 			*index++
 			return []interface{}{v.Interface()}, nil
 		}
@@ -185,7 +194,7 @@ func (d *dialect) expandParameter(withManaged, wrap bool, w *strings.Builder, in
 			}
 			field := builder.fieldMap[name]
 			fv := v.FieldByIndex(field.index)
-			children, err := d.expandParameter(withManaged, false, w, index, fv)
+			children, err := expandParameter(d, withManaged, false, w, index, fv)
 			if err != nil {
 				return nil, err
 			}
@@ -197,17 +206,17 @@ func (d *dialect) expandParameter(withManaged, wrap bool, w *strings.Builder, in
 
 	case reflect.Ptr:
 		if v.IsNil() {
-			w.WriteString(d.sequential(*index))
+			w.WriteString(d.Placeholder(*index))
 			*index++
 			return []interface{}{nil}, nil
 		}
-		out, err = d.expandParameter(withManaged, wrap, w, index, v.Elem())
+		out, err = expandParameter(d, withManaged, wrap, w, index, v.Elem())
 		if err != nil {
 			return nil, err
 		}
 
 	case reflect.Interface:
-		out, err = d.expandParameter(withManaged, wrap, w, index, v.Elem())
+		out, err = expandParameter(d, withManaged, wrap, w, index, v.Elem())
 		if err != nil {
 			return nil, err
 		}

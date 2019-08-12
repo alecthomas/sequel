@@ -38,12 +38,12 @@ func TestDialectExpand(t *testing.T) {
 			args:  []interface{}{"Moe", 39, "moe@stooges.com"},
 			expected: []dialectResult{
 				{
-					dialect: pqDialect,
+					dialect: dialects["postgres"],
 					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
 					query:   `INSERT INTO user (name, age, email) VALUES ($1, $2, $3)`,
 				},
 				{
-					dialect: mysqlDialect,
+					dialect: dialects["mysql"],
 					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
 					query:   `INSERT INTO user (name, age, email) VALUES (?, ?, ?)`,
 				},
@@ -59,12 +59,12 @@ func TestDialectExpand(t *testing.T) {
 			}{"Moe", 39, "moe@stooges.com"}},
 			expected: []dialectResult{
 				{
-					dialect: pqDialect,
+					dialect: dialects["postgres"],
 					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
 					query:   `INSERT INTO user (name, age, email) VALUES ($1, $2, $3)`,
 				},
 				{
-					dialect: mysqlDialect,
+					dialect: dialects["mysql"],
 					args:    []interface{}{"Moe", 39, "moe@stooges.com"},
 					query:   `INSERT INTO user (name, age, email) VALUES (?, ?, ?)`,
 				},
@@ -82,12 +82,12 @@ func TestDialectExpand(t *testing.T) {
 			}},
 			expected: []dialectResult{
 				{
-					dialect: pqDialect,
+					dialect: dialects["postgres"],
 					query:   `INSERT INTO user VALUES ($1, $2), ($3, $4)`,
 					args:    []interface{}{43, "Moe", 39, "Curly"},
 				},
 				{
-					dialect: mysqlDialect,
+					dialect: dialects["mysql"],
 					query:   `INSERT INTO user VALUES (?, ?), (?, ?)`,
 					args:    []interface{}{43, "Moe", 39, "Curly"},
 				},
@@ -118,12 +118,12 @@ func TestDialectExpand(t *testing.T) {
 			},
 			expected: []dialectResult{
 				{
-					dialect: pqDialect,
+					dialect: dialects["postgres"],
 					query:   `INSERT INTO table VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
 					args:    []interface{}{2, "Moe", "moe@stooges.com", 39, 3, "Curly", "curly@stooges.com", 39},
 				},
 				{
-					dialect: mysqlDialect,
+					dialect: dialects["mysql"],
 					query:   `INSERT INTO table VALUES (?, ?, ?, ?), (?, ?, ?, ?)`,
 					args:    []interface{}{2, "Moe", "moe@stooges.com", 39, 3, "Curly", "curly@stooges.com", 39},
 				},
@@ -133,8 +133,8 @@ func TestDialectExpand(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			for _, result := range test.expected {
-				t.Run(result.dialect.name, func(t *testing.T) {
-					query, args, err := result.dialect.expand(true, nil, test.query, test.args)
+				t.Run(result.dialect.Name(), func(t *testing.T) {
+					query, args, err := expand(result.dialect, true, nil, test.query, test.args)
 					require.NoError(t, err, "%q", test.query)
 					require.Equal(t, result.query, query)
 					require.Equal(t, result.args, args)
@@ -148,7 +148,7 @@ func TestDialectExpandSelect(t *testing.T) {
 	dest := []TestUser{}
 	builder, err := makeRowBuilderForSlice(&dest)
 	require.NoError(t, err)
-	query, args, err := pqDialect.expand(true, builder, `SELECT ** FROM test`, nil)
+	query, args, err := expand(dialects["postgres"], true, builder, `SELECT ** FROM test`, nil)
 	require.NoError(t, err)
 	require.Equal(t, "SELECT `id`, `name`, `email`, `age` FROM test", query)
 	require.Empty(t, args)
