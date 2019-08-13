@@ -233,6 +233,12 @@ func expand(d dialect, withManaged bool, builder *builder, query string, args []
 //
 // Parentheses will enclose struct fields and slice elements unless "root" is true.
 func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, err error) {
+	if _, ok := v.Interface().(driver.Valuer); ok {
+		w.WriteString(d.Placeholder(*index))
+		*index++
+		return []interface{}{v.Interface()}, nil
+	}
+
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
@@ -254,12 +260,6 @@ func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, inde
 		}
 
 	case reflect.Struct:
-		if _, ok := v.Interface().(driver.Valuer); ok {
-			w.WriteString(d.Placeholder(*index))
-			*index++
-			return []interface{}{v.Interface()}, nil
-		}
-
 		if wrap {
 			w.WriteString("(")
 		}
