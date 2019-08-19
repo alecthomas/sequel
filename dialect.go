@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -26,10 +27,15 @@ var (
 			d.d = d
 			return d
 		}(),
-		"postgres": &pqDialect{ansiDialect{name: "postgres"}},
+		"postgres": func() dialect {
+			p := &pqDialect{ansiUpsertMixin{}}
+			p.ansiUpsertMixin.d = p
+			return p
+		}(),
 		"sqlite3": func() dialect {
-			d := &sqliteDialect{ansiDialect{name: "sqlite3"}, lastInsertMixin{}}
-			d.d = d
+			d := &sqliteDialect{}
+			d.ansiUpsertMixin.d = d
+			d.lastInsertMixin.d = d
 			return d
 		}(),
 	}
@@ -130,51 +136,107 @@ func (m *mysqlDialect) Placeholder(n int) string { return "?" }
 func (m *mysqlDialect) Upsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.filteredFields(true) {
-		set = append(set, fmt.Sprintf("%s = VALUE(%s)",
+		set = append(set, fmt.Sprintf("%s=VALUES(%s)",
 			quoteBacktick(field), quoteBacktick(field)))
 	}
 	return fmt.Sprintf(`
-				INSERT INTO %s (%s) VALUES ?
-				ON DUPLICATE KEY UPDATE %s
-				`,
+			INSERT INTO %s (%s) VALUES ?
+			ON DUPLICATE KEY UPDATE %s
+		`,
 		quoteBacktick(table),
 		quoteAndJoinIDs(quoteBacktick, builder.filteredFields(true)),
-		quoteAndJoinIDs(quoteBacktick, set))
+		strings.Join(set, ","))
 }
 
-type ansiDialect struct {
-	name string
+type ansiUpsertMixin struct {
+	d dialect
 }
 
-func (a *ansiDialect) Name() string             { return a.name }
-func (a *ansiDialect) QuoteID(s string) string  { return quoteBacktick(s) }
-func (a *ansiDialect) Placeholder(n int) string { return "?" }
-func (a *ansiDialect) Upsert(table string, keys []string, builder *builder) string {
+func (a *ansiUpsertMixin) Upsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.filteredFields(true) {
-		set = append(set, fmt.Sprintf("%s = excluded.%s",
-			quoteBacktick(field), quoteBacktick(field)))
+		set = append(set, fmt.Sprintf("%s = EXCLUDED.%s",
+			a.d.QuoteID(field), a.d.QuoteID(field)))
 	}
 	return fmt.Sprintf(`
 			INSERT INTO %s (%s) VALUES ?
 			ON CONFLICT (%s)
 			DO UPDATE SET %s
-			`,
-		quoteBacktick(table),
-		quoteAndJoinIDs(quoteBacktick, builder.filteredFields(true)),
-		quoteAndJoinIDs(quoteBacktick, keys), strings.Join(set, ", "))
+		`,
+		a.d.QuoteID(table),
+		quoteAndJoinIDs(a.d.QuoteID, builder.filteredFields(true)),
+		quoteAndJoinIDs(a.d.QuoteID, keys), strings.Join(set, ", "))
 }
 
 type sqliteDialect struct {
-	ansiDialect
+	ansiUpsertMixin
 	lastInsertMixin
 }
 
-type pqDialect struct{ ansiDialect }
+var _ dialect = &sqliteDialect{}
 
+func (s *sqliteDialect) Name() string           { return "sqlite" }
+func (*sqliteDialect) QuoteID(s string) string  { return quoteBacktick(s) }
+func (*sqliteDialect) Placeholder(n int) string { return "?" }
+
+type pqDialect struct{ ansiUpsertMixin }
+
+var _ dialect = &pqDialect{}
+
+func (p *pqDialect) Name() string             { return "postgres" }
+func (p *pqDialect) QuoteID(s string) string  { return strconv.Quote(s) }
 func (p *pqDialect) Placeholder(n int) string { return fmt.Sprintf("$%d", n+1) }
+
 func (p *pqDialect) Insert(ops sqlOps, table string, rows []interface{}) ([]int64, error) {
-	panic("not implemented")
+	arg, count, t, slice := typeForMutationRows(rows...)
+	builder, err := makeRowBuilderForType(t)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to map type %s", t)
+	}
+	elem := slice.Index(0)
+	if elem.Kind() == reflect.Interface {
+		elem = elem.Elem()
+	}
+	if builder.pk != "" && elem.Kind() == reflect.Struct {
+		return nil, errors.Errorf("can't set PK on value %s, must be *%s", elem.Type(), elem.Type())
+	}
+	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
+		p.QuoteID(table),
+		quoteAndJoinIDs(p.QuoteID, builder.filteredFields(false)))
+
+	if builder.pk != "" {
+		query += fmt.Sprintf(` RETURNING %s`, p.QuoteID(builder.pk))
+	}
+	query, args, err := expand(p, false, builder, query, []interface{}{arg})
+	if err != nil {
+		return nil, err
+	}
+	outRows, err := ops.Query(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to execute %q", query)
+	}
+	defer outRows.Close()
+
+	if builder.pk == "" {
+		return nil, nil
+	}
+
+	i := 0
+	f := builder.fieldMap[builder.pk]
+	ids := make([]int64, 0, count)
+	for outRows.Next() {
+		var id int64
+		err = outRows.Scan(&id)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to scan inserted ID")
+		}
+		ids = append(ids, id)
+		row := indirectValue(slice.Index(i))
+		rf := row.FieldByIndex(f.index)
+		rf.SetInt(ids[i])
+		i++
+	}
+	return ids, outRows.Err()
 }
 
 func quoteBacktick(s string) string {
