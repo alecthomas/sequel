@@ -147,20 +147,12 @@ type queryable struct {
 //
 // Returns the expanded query and args, or an error.
 func (q *queryable) Expand(query string, withManaged bool, args ...interface{}) (string, []interface{}, error) {
-	builder, err := makeRowBuilderForSliceOfInterface(args)
-	if err != nil {
-		return "", nil, err
-	}
-	return expand(q.dialect, withManaged, builder, query, args)
+	return expand(q.dialect, withManaged, nil, query, args)
 }
 
 // Exec an SQL statement and ignore the result.
 func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err error) {
-	builder, err := makeRowBuilderForSliceOfInterface(args)
-	if err != nil {
-		return nil, err
-	}
-	query, args, err = expand(q.dialect, true, builder, query, args)
+	query, args, err = expand(q.dialect, true, nil, query, args)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to expand query %q", query)
 	}
@@ -266,7 +258,7 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 //
 // Will return sql.ErrNoRows if no rows are returned.
 func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}) error {
-	builder, err := makeRowBuilder(ref, true)
+	builder, err := makeRowBuilder(ref)
 	if err != nil {
 		return errors.Wrapf(err, "failed to map type %T", ref)
 	}

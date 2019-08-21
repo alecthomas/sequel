@@ -253,7 +253,10 @@ func quoteAndJoinIDs(quoteID func(s string) string, ids []string) string {
 }
 
 // Expand a query and arguments using the Sequel recursive expansion rules.
-func expand(d dialect, withManaged bool, builder *builder, query string, args []interface{}) (string, []interface{}, error) {
+//
+// If "builder" is provided it will be used to interpolate any `**` placeholders.
+// If it is not provided, the matching positional argument will be used.
+func expand(d dialect, withManaged bool, b *builder, query string, args []interface{}) (string, []interface{}, error) {
 	// Fragments of text making up the final statement.
 	w := &strings.Builder{}
 	out := []interface{}{}
@@ -275,13 +278,19 @@ func expand(d dialect, withManaged bool, builder *builder, query string, args []
 			}
 			out = append(out, parameterArgs...)
 			argi++
+
 		case match[2] == "**":
-			if builder == nil {
-				w.WriteString("*")
-			} else {
-				// Wildcard - expand all column names.
-				w.WriteString(quoteAndJoinIDs(d.QuoteID, builder.fields))
+			paramBuilder := b
+			if paramBuilder == nil {
+				var err error
+				paramBuilder, err = makeRowBuilderForType(reflect.TypeOf(args[argi]))
+				if err != nil {
+					return "", nil, err
+				}
 			}
+			// Wildcard - expand all column names.
+			w.WriteString(quoteAndJoinIDs(d.QuoteID, paramBuilder.fields))
+
 		default:
 			// Text fragment, output it.
 			w.WriteString(match[0])

@@ -21,12 +21,15 @@ var (
 )
 
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
-func makeRowBuilder(v interface{}, withManaged bool) (*builder, error) {
-	t := reflect.TypeOf(v)
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
-		return nil, errors.Errorf("can only scan into pointer to struct, not %s", t)
+func makeRowBuilder(v interface{}) (*builder, error) {
+	t := indirectType(reflect.TypeOf(v))
+	if t.Kind() == reflect.Slice {
+		t = t.Elem()
 	}
-	return makeRowBuilderForType(t.Elem())
+	if t.Kind() != reflect.Struct {
+		return nil, errors.Errorf("can only scan into pointer to struct or slice of same, not %s", t)
+	}
+	return makeRowBuilderForType(t)
 }
 
 // Creates a function that can efficiently construct field references for use with sql.Rows.Scan(...).
@@ -37,19 +40,6 @@ func makeRowBuilderForSlice(slice interface{}) (*builder, error) {
 	}
 	t = t.Elem().Elem()
 	return makeRowBuilderForType(t)
-}
-
-func makeRowBuilderForSliceOfInterface(slice []interface{}) (*builder, error) {
-	if len(slice) == 0 {
-		return nil, nil
-	}
-	v := reflect.ValueOf(slice[0])
-	if v.Kind() == reflect.Slice {
-		return makeRowBuilderForType(v.Index(0).Type())
-	} else if v.Kind() == reflect.Struct {
-		return makeRowBuilderForType(v.Type())
-	}
-	return nil, nil
 }
 
 func indirectType(t reflect.Type) reflect.Type {
@@ -70,6 +60,9 @@ func indirectValue(v reflect.Value) reflect.Value {
 
 func makeRowBuilderForType(t reflect.Type) (*builder, error) {
 	t = indirectType(t)
+	if t.Kind() == reflect.Slice {
+		t = t.Elem()
+	}
 	if t.Kind() != reflect.Struct {
 		return nil, errors.Errorf("can only build rows for structs not %s", t)
 	}
