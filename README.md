@@ -61,7 +61,7 @@ err = db.Select(&users, `
 
 Each placeholder symbol `?` in a query string maps 1:1 to a corresponding argument in the `Select()` or `Exec()` call.
 
-The additional placeholder `**` will expand to the set of fields in your data model. This is useful.
+The additional placeholder `**` will expand to the set of *unmanaged* fields in your data model.
 
 Arguments are expanded recursively. Structs map to a parentheses-enclosed, comma-separated list. Slices map to a comma-separated list.
 
@@ -77,15 +77,19 @@ Value                                           | Placeholder | Corresponding ex
 Struct fields may be tagged with `db:"..."` to control how Sequel maps fields. The tag has the following
 syntax:
 
-    db:"<name>[,managed,pk]"
+    db:"[<name>][,<option>,...]"
     
-If omitted, the lower-snake-case mapping of the Go field name will be used.
+To omit a field from mapping use:
+
+    db:"-"
+    
+If a field name is not explicitly provided the lower-snake-case mapping of the Go field name will be used.
 eg. `MyIDField` -> `my_id_field`.
     
 Tag option    | Meaning
 --------------|----------------------------------------
 `managed`     | Field is managed by the database. This informs `Insert()` which fields should not be propagated.
-`pk`          | Field is the primary key. Auto-increment fields should also be tagged as `managed`.
+`pk`          | Field is the primary key. `pk` fields will be set after `Insert()`. Auto-increment `pk` fields should also be tagged as `managed`.
 
 ## Insert
 

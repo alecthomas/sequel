@@ -110,6 +110,10 @@ func collectFieldIndexes(t reflect.Type) ([]field, error) {
 		f := t.Field(i)
 		ft := f.Type
 
+		if f.Tag.Get("db") == "-" {
+			continue
+		}
+
 		if ft == timeType || ft == byteSliceType || ft.Implements(scannerType) || reflect.PtrTo(ft).Implements(scannerType) {
 			fld, err := parseField(f, []int{i})
 			if err != nil {
