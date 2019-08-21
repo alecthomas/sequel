@@ -175,7 +175,20 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 // Finally, for structs with PKs, those PKs will be updated.
 func (q *queryable) Insert(table string, rows ...interface{}) ([]int64, error) {
 	if len(rows) == 0 {
-		return nil, errors.Errorf("no rows to update")
+		return nil, nil
+	}
+	// Sanity checks.
+	if len(rows) == 1 {
+		v := indirectValue(reflect.ValueOf(rows[0]))
+		switch v.Kind() {
+		case reflect.Slice:
+			if v.Len() == 0 {
+				return nil, nil
+			}
+		case reflect.Struct:
+		default:
+			return nil, errors.Errorf("unexpected a slice or struct but got %T", rows)
+		}
 	}
 	return q.dialect.Insert(q.db, table, rows)
 }
