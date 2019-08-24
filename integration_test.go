@@ -5,6 +5,7 @@ package sequel
 import (
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql" // imported for side-effects
 	_ "github.com/lib/pq"              // imported for side-effects
@@ -15,9 +16,12 @@ import (
 const sqliteTestFile = "./sqlite_integration_test.db"
 
 func TestDialects(t *testing.T) {
+	type Common struct {
+	}
 	type User struct {
-		ID   int `db:",pk,managed"`
-		Name string
+		ID      int       `db:",pk,managed"`
+		Created time.Time `db:",managed"`
+		Name    string
 	}
 
 	drivers := []struct {
@@ -31,14 +35,16 @@ func TestDialects(t *testing.T) {
 			create: `
 				CREATE TABLE users (
 					id INTEGER PRIMARY KEY,
+					created DATETIME DEFAULT CURRENT_TIMESTAMP,
 					name VARCHAR(128) NOT NULL
 				)`,
 			cleanup: func(*DB) error { return os.Remove(sqliteTestFile) }},
 		{driver: "mysql",
-			dsn: "root:@/sequel_test",
+			dsn: "root:@/sequel_test?parseTime=true",
 			create: `
 				CREATE TABLE users (
 					id INTEGER PRIMARY KEY AUTO_INCREMENT,
+					created DATETIME DEFAULT CURRENT_TIMESTAMP,
 					name VARCHAR(128) NOT NULL
 				)`,
 			cleanup: func(db *DB) error {
@@ -51,6 +57,7 @@ func TestDialects(t *testing.T) {
 			create: `
 				CREATE TABLE users (
 					id SERIAL PRIMARY KEY,
+					created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 					name VARCHAR(128) NOT NULL
 				)`,
 			cleanup: func(db *DB) error {
@@ -68,6 +75,12 @@ func TestDialects(t *testing.T) {
 		require.Equal(t, int(ids[0]), users[0].ID)
 		require.Equal(t, int(ids[1]), users[1].ID)
 		return users
+	}
+
+	normaliseUsers := func(users []*User) {
+		for _, user := range users {
+			user.Created = time.Time{}
+		}
 	}
 
 	tests := []struct {
@@ -93,20 +106,24 @@ func TestDialects(t *testing.T) {
 		}},
 		{"Select", func(t *testing.T, db *DB) {
 			expected := insertSlice(t, db)
-			users := []*User{}
-			err := db.Select(&users, `SELECT ** FROM users ORDER BY name`)
+			actual := []*User{}
+			err := db.Select(&actual, `SELECT ** FROM users ORDER BY name`)
 			require.NoError(t, err)
-			require.Equal(t, expected, users)
+			normaliseUsers(actual)
+			require.Equal(t, expected, actual)
 		}},
 		{"Upsert", func(t *testing.T, db *DB) {
 			users := insertSlice(t, db)
 			users[0].Name = "Alex"
+			users[0].Created = time.Now()
 			_, err := db.Upsert("users", []string{"id"}, users[0])
 			require.NoError(t, err)
 
 			actual := []*User{}
 			err = db.Select(&actual, `SELECT ** FROM users ORDER BY name`)
 			require.NoError(t, err)
+			normaliseUsers(users)
+			normaliseUsers(actual)
 			require.Equal(t, users, actual)
 		}},
 	}

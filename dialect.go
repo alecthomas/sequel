@@ -345,11 +345,9 @@ func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, inde
 			}
 			field := builder.fieldMap[name]
 			fv := v.FieldByIndex(field.index)
-			children, err := expandParameter(d, withManaged, false, w, index, fv)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, children...)
+			out = append(out, fv.Interface())
+			w.WriteString(d.Placeholder(*index))
+			*index++
 		}
 		if wrap {
 			w.WriteString(")")
