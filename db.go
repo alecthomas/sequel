@@ -17,6 +17,7 @@ type Interface interface {
 	Upsert(table string, keys []string, rows ...interface{}) (sql.Result, error)
 	Expand(query string, withManaged bool, args ...interface{}) (string, []interface{}, error)
 	Exec(query string, args ...interface{}) (res sql.Result, err error)
+	Update(query string, args ...interface{}) (affected int64, err error)
 	Select(slice interface{}, query string, args ...interface{}) (err error)
 	SelectOne(ref interface{}, query string, args ...interface{}) error
 	SelectScalar(value interface{}, query string, args ...interface{}) (err error)
@@ -162,6 +163,15 @@ func (q *queryable) Exec(query string, args ...interface{}) (res sql.Result, err
 		return nil, errors.Wrapf(err, "failed to execute %q", query)
 	}
 	return result, nil
+}
+
+// Update executes an SQL statement and returns the number of rows affected.
+func (q *queryable) Update(query string, args ...interface{}) (affected int64, err error) {
+	result, err := q.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // Insert rows.
