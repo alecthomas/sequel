@@ -10,7 +10,6 @@ linters:
     - maligned
     - lll
     - gochecknoglobals
-    - wsl
     - godox
     - funlen
 
