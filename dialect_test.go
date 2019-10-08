@@ -53,8 +53,8 @@ func TestDialectExpand(t *testing.T) {
 			name:  "Struct",
 			query: `INSERT INTO user (name, age, email) VALUES ?`,
 			args: []interface{}{struct {
-				Name  string;
-				Age   int;
+				Name  string
+				Age   int
 				Email string
 			}{"Moe", 39, "moe@stooges.com"}},
 			expected: []dialectResult{
@@ -98,7 +98,7 @@ func TestDialectExpand(t *testing.T) {
 			query: `INSERT INTO table VALUES ?`,
 			args: []interface{}{
 				[]TestUser{
-					TestUser{
+					{
 						ID:   2,
 						Name: "Moe",
 						TestMetadata: TestMetadata{
@@ -106,7 +106,7 @@ func TestDialectExpand(t *testing.T) {
 							Age:   39,
 						},
 					},
-					TestUser{
+					{
 						ID:   3,
 						Name: "Curly",
 						TestMetadata: TestMetadata{
@@ -131,6 +131,7 @@ func TestDialectExpand(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		// nolint: scopelint
 		t.Run(test.name, func(t *testing.T) {
 			for _, result := range test.expected {
 				t.Run(result.dialect.Name(), func(t *testing.T) {

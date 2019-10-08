@@ -256,14 +256,14 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to prepare select %q", query)
 	}
-	types, err := rows.ColumnTypes()
+	_, err = rows.ColumnTypes()
 	if err != nil {
 		return errors.Wrap(err, "failed to retrieve result column types")
 	}
 	out := reflect.ValueOf(slice).Elem()
 	addrElem := out.Type().Elem().Kind() == reflect.Ptr
 	for rows.Next() {
-		el, values := builder.build(columns, types)
+		el, values := builder.build(columns)
 		err = rows.Scan(values...)
 		if err != nil {
 			return errors.Wrap(err, mapping)

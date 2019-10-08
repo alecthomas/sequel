@@ -1,4 +1,4 @@
-# Sequel - A Go <-> SQL mapping package (Status: ALPHA)
+# Sequel - A Go <-> SQL mapping package (Status: ALPHA)  [![](https://godoc.org/github.com/alecthomas/sequel?status.svg)](http://godoc.org/github.com/alecthomas/sequel) [![CircleCI](https://img.shields.io/circleci/project/github/alecthomas/sequel.svg)](https://circleci.com/gh/alecthomas/sequel)
 
 Sequel is similar to SQLx, but with the goal of automating even more of the common
 operations around Go <-> SQL interaction.

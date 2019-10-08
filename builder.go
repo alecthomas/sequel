@@ -210,7 +210,7 @@ func (b *builder) fill(v interface{}, columns []string) (out []interface{}) {
 	return
 }
 
-func (b *builder) build(columns []string, types []*sql.ColumnType) (reflect.Value, []interface{}) {
+func (b *builder) build(columns []string) (reflect.Value, []interface{}) {
 	out := make([]interface{}, len(columns))
 	v := reflect.New(b.t).Elem()
 	for i, column := range columns {

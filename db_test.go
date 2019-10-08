@@ -1,3 +1,4 @@
+// nolint: scopelint
 package sequel_test
 
 import (
@@ -85,6 +86,7 @@ func TestDBSelect(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		// nolint: scopelint
 		t.Run(test.name, func(t *testing.T) {
 			db := databaseFixture(t)
 			defer db.Close()
@@ -134,6 +136,7 @@ func TestSelectOne(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		// nolint: scopelint
 		t.Run(test.name, func(t *testing.T) {
 			actual := User{}
 			err := db.SelectOne(&actual, test.sql)
@@ -262,9 +265,9 @@ func TestUpsert(t *testing.T) {
 	}
 }
 
-func databaseFixture(t *testing.T, options ...sequel.Option) *sequel.DB {
+func databaseFixture(t *testing.T) *sequel.DB {
 	t.Helper()
-	db, err := sequel.Open("sqlite3", ":memory:", options...)
+	db, err := sequel.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
 	_, err = db.Exec(`
 	CREATE TABLE users (

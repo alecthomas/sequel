@@ -78,6 +78,7 @@ func (l *lastInsertMixin) Insert(ops sqlOps, table string, rows []interface{}) (
 	if builder.pk != "" && elem.Kind() == reflect.Struct {
 		return nil, errors.Errorf("can't set PK on value %s, must be *%s", elem.Type(), elem.Type())
 	}
+	// nolint: gosec
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
 		l.d.QuoteID(table),
 		quoteAndJoinIDs(l.d.QuoteID, builder.filteredFields(false)))
@@ -139,6 +140,7 @@ func (m *mysqlDialect) Upsert(table string, keys []string, builder *builder) str
 		set = append(set, fmt.Sprintf("%s=VALUES(%s)",
 			quoteBacktick(field), quoteBacktick(field)))
 	}
+	// nolint: gosec
 	return fmt.Sprintf(`
 			INSERT INTO %s (%s) VALUES ?
 			ON DUPLICATE KEY UPDATE %s
@@ -155,9 +157,11 @@ type ansiUpsertMixin struct {
 func (a *ansiUpsertMixin) Upsert(table string, keys []string, builder *builder) string {
 	set := []string{}
 	for _, field := range builder.filteredFields(true) {
+		// nolint: gosec
 		set = append(set, fmt.Sprintf("%s = EXCLUDED.%s",
 			a.d.QuoteID(field), a.d.QuoteID(field)))
 	}
+	// nolint: gosec
 	return fmt.Sprintf(`
 			INSERT INTO %s (%s) VALUES ?
 			ON CONFLICT (%s)
@@ -200,6 +204,7 @@ func (p *pqDialect) Insert(ops sqlOps, table string, rows []interface{}) ([]int6
 	if builder.pk != "" && elem.Kind() == reflect.Struct {
 		return nil, errors.Errorf("can't set PK on value %s, must be *%s", elem.Type(), elem.Type())
 	}
+	// nolint: gosec
 	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES ?`,
 		p.QuoteID(table),
 		quoteAndJoinIDs(p.QuoteID, builder.filteredFields(false)))
@@ -295,7 +300,6 @@ func expand(d dialect, withManaged bool, b *builder, query string, args []interf
 			// Text fragment, output it.
 			w.WriteString(match[0])
 		}
-
 	}
 	return w.String(), out, nil
 }
@@ -303,12 +307,14 @@ func expand(d dialect, withManaged bool, b *builder, query string, args []interf
 // Expand a single parameter.
 //
 // Parentheses will enclose struct fields and slice elements unless "root" is true.
-func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, index *int, v reflect.Value) (out []interface{}, err error) {
+func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, index *int, v reflect.Value) ([]interface{}, error) { // nolint: interfacer
 	if _, ok := v.Interface().(driver.Valuer); ok {
 		w.WriteString(d.Placeholder(*index))
 		*index++
 		return []interface{}{v.Interface()}, nil
 	}
+
+	var out []interface{}
 
 	switch v.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
@@ -359,12 +365,14 @@ func expandParameter(d dialect, withManaged, wrap bool, w *strings.Builder, inde
 			*index++
 			return []interface{}{nil}, nil
 		}
+		var err error
 		out, err = expandParameter(d, withManaged, wrap, w, index, v.Elem())
 		if err != nil {
 			return nil, err
 		}
 
 	case reflect.Interface:
+		var err error
 		out, err = expandParameter(d, withManaged, wrap, w, index, v.Elem())
 		if err != nil {
 			return nil, err
