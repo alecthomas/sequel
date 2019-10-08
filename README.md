@@ -1,4 +1,7 @@
-# Sequel - A Go <-> SQL mapping package
+# Sequel - A Go <-> SQL mapping package (Status: ALPHA)
+
+Sequel is similar to SQLx, but with the goal of automating even more of the common
+operations around Go <-> SQL interaction.
 
 ## Why?
 
@@ -6,12 +9,12 @@ I wanted a very thin mapping between SQL and Go that provides:
 
 1. `SELECT` into arbitrary `struct`s.
 2. Query parameters populated from arbitrary Go types - structs, slices, etc.
-3. Normalised sequential placeholders (`?`) (support for positional placeholders will hopefully come later).
-4. Try to be as safe as possible.
+3. Normalised sequential placeholders across SQL dialects (`?`) (support for positional placeholders will hopefully come later).
+4. Try to be as type safe as possible.
 
 I did not want:
 
-1. A query DSL - we already know SQL.
+1. A query DSL - I already know SQL.
 2. Migration support - there are much better external tools for this.
 
 ## Tutorial / example
@@ -37,7 +40,7 @@ users := []dbUser{
     {Name: "Larry", Email: "larry@stooges.com"},
     {Name: "Curly", Email: "curly@stooges.com"},
 }
-_, err = db.Exec("INSERT INTO users ** VALUES ?", users)
+_, err = db.Insert("users", users)
 ```
 
 Selecting uses a similar approach:
@@ -45,23 +48,19 @@ Selecting uses a similar approach:
 ```go
 users := []dbUser{}
 err = db.Select(&users, `
-    SELECT * FROM users WHERE id IN (
+    SELECT ** FROM users WHERE id IN (
         SELECT user_id FROM group_members WHERE group_id = ?
     )
 `, groupID)
 ```
 
-## Directives
-
-### Selectors
-
-### Placeholders
-
-## Placeholder expansion rules
+## Placeholders
 
 Each placeholder symbol `?` in a query string maps 1:1 to a corresponding argument in the `Select()` or `Exec()` call.
 
-The additional placeholder `**` will expand to the set of *unmanaged* fields in your data model.
+The placeholder `**` will expand to the set of *unmanaged* fields in your data model. Managed fields are those
+managed by the database, such as auto-increment keys, fields with auto-update values, etc. See section 
+below on "Dealing with schema changes" for why this placeholder is useful.
 
 Arguments are expanded recursively. Structs map to a parentheses-enclosed, comma-separated list. Slices map to a comma-separated list.
 
