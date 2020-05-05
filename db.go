@@ -324,7 +324,6 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 	if err != nil {
 		return nil, nil, "", errors.Wrapf(err, "%q (mapping to fields %s)", query, strings.Join(builder.fields, ", "))
 	}
-	defer rows.Close()
 	columns, err = rows.Columns()
 	if err != nil {
 		_ = rows.Close()
@@ -347,7 +346,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 		_ = rows.Close()
 		return nil, nil, "", errors.Errorf("invalid mapping %s", mapping)
 	}
-	return rows, columns, mapping, rows.Err()
+	return rows, columns, mapping, nil
 }
 
 // SelectScalar selects a single column row into value.
