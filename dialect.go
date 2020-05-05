@@ -1,6 +1,7 @@
 package sequel
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"fmt"
 	"reflect"
@@ -48,6 +49,8 @@ var (
 // 		"SELECT * FROM users WHERE id = ? OR name = ?"
 type dialect interface {
 	Name() string
+	// Return true if the given connection is this dialect.
+	Detect(db *sql.DB) bool
 	// Quote a table or column identifier.
 	QuoteID(s string) string
 	// Return the dialect-specific placeholder string for parameter "n".
@@ -131,6 +134,11 @@ type mysqlDialect struct {
 	lastInsertMixin
 }
 
+func (m *mysqlDialect) Detect(db *sql.DB) bool {
+	_, err := db.Exec(`SELECT SQL_NO_CACHE 1`)
+	return err == nil
+}
+
 func (m *mysqlDialect) Name() string             { return "mysql" }
 func (m *mysqlDialect) QuoteID(s string) string  { return quoteBacktick(s) }
 func (m *mysqlDialect) Placeholder(n int) string { return "?" }
@@ -179,6 +187,11 @@ type sqliteDialect struct {
 
 var _ dialect = &sqliteDialect{}
 
+func (s *sqliteDialect) Detect(db *sql.DB) bool {
+	_, err := db.Exec(`select sqlite_version()`)
+	return err == nil
+}
+
 func (s *sqliteDialect) Name() string           { return "sqlite" }
 func (*sqliteDialect) QuoteID(s string) string  { return quoteBacktick(s) }
 func (*sqliteDialect) Placeholder(n int) string { return "?" }
@@ -186,6 +199,11 @@ func (*sqliteDialect) Placeholder(n int) string { return "?" }
 type pqDialect struct{ ansiUpsertMixin }
 
 var _ dialect = &pqDialect{}
+
+func (p *pqDialect) Detect(db *sql.DB) bool {
+	_, err := db.Exec(`SHOW server_version`)
+	return err == nil
+}
 
 func (p *pqDialect) Name() string             { return "postgres" }
 func (p *pqDialect) QuoteID(s string) string  { return strconv.Quote(s) }

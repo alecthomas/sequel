@@ -46,11 +46,21 @@ func Open(driver, dsn string, options ...Option) (*DB, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to open SQL connection")
 	}
-	return New(driver, db, options...)
+	return NewFromDriver(driver, db, options...)
 }
 
-// New creates a new Sequel mapper from an existing DB connection.
-func New(driver string, db *sql.DB, options ...Option) (*DB, error) {
+// New attempts to auto-detect the underlying SQL driver through sniffing.
+func New(db *sql.DB, options ...Option) (*DB, error) {
+	for _, dialect := range dialects {
+		if dialect.Detect(db) {
+			return NewFromDriver(dialect.Name(), db, options...)
+		}
+	}
+	return nil, errors.New("could not detect SQL driver")
+}
+
+// NewFromDriver creates a new Sequel mapper from an existing DB connection.
+func NewFromDriver(driver string, db *sql.DB, options ...Option) (*DB, error) {
 	dialect, ok := dialects[driver]
 	if !ok {
 		return nil, errors.Errorf("unsupported SQL driver %q", driver)
@@ -256,6 +266,7 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to prepare select %q", query)
 	}
+	defer rows.Close()
 	_, err = rows.ColumnTypes()
 	if err != nil {
 		return errors.Wrap(err, "failed to retrieve result column types")
@@ -274,7 +285,7 @@ func (q *queryable) Select(slice interface{}, query string, args ...interface{})
 		out = reflect.Append(out, el)
 	}
 	reflect.ValueOf(slice).Elem().Set(out)
-	return nil
+	return rows.Err()
 }
 
 // SelectOne issues a query and selects a single row into ref.
@@ -301,7 +312,7 @@ func (q *queryable) SelectOne(ref interface{}, query string, args ...interface{}
 	if rows.Next() {
 		return errors.Errorf("more than one row returned from %q", query)
 	}
-	return nil
+	return rows.Err()
 }
 
 func (q *queryable) prepareSelect(builder *builder, query string, args ...interface{}) (rows *sql.Rows, columns []string, mapping string, err error) {
@@ -313,6 +324,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 	if err != nil {
 		return nil, nil, "", errors.Wrapf(err, "%q (mapping to fields %s)", query, strings.Join(builder.fields, ", "))
 	}
+	defer rows.Close()
 	columns, err = rows.Columns()
 	if err != nil {
 		_ = rows.Close()
@@ -335,7 +347,7 @@ func (q *queryable) prepareSelect(builder *builder, query string, args ...interf
 		_ = rows.Close()
 		return nil, nil, "", errors.Errorf("invalid mapping %s", mapping)
 	}
-	return rows, columns, mapping, nil
+	return rows, columns, mapping, rows.Err()
 }
 
 // SelectScalar selects a single column row into value.

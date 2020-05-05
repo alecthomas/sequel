@@ -16,8 +16,6 @@ import (
 const sqliteTestFile = "./sqlite_integration_test.db"
 
 func TestDialects(t *testing.T) {
-	type Common struct {
-	}
 	type User struct {
 		ID      int       `db:",pk,managed"`
 		Created time.Time `db:",managed"`
