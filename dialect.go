@@ -22,24 +22,28 @@ var (
 			"(`(?:\\.|[^`])*`)|" +
 			"([^$*?\"']+)")
 
-	dialects = map[string]dialect{
-		"mysql": func() dialect {
-			d := &mysqlDialect{lastInsertMixin{idIsFirst: true}}
-			d.d = d
-			return d
-		}(),
-		"postgres": func() dialect {
-			p := &pqDialect{ansiUpsertMixin{}}
-			p.ansiUpsertMixin.d = p
-			return p
-		}(),
-		"sqlite3": func() dialect {
-			d := &sqliteDialect{}
-			d.ansiUpsertMixin.d = d
-			d.lastInsertMixin.d = d
-			return d
-		}(),
-	}
+	dialects = func() map[string]dialect {
+		dialects := map[string]dialect{
+			"mysql": func() dialect {
+				d := &mysqlDialect{lastInsertMixin{idIsFirst: true}}
+				d.d = d
+				return d
+			}(),
+			"postgres": func() dialect {
+				p := &pqDialect{ansiUpsertMixin{}}
+				p.ansiUpsertMixin.d = p
+				return p
+			}(),
+			"sqlite": func() dialect {
+				d := &sqliteDialect{}
+				d.ansiUpsertMixin.d = d
+				d.lastInsertMixin.d = d
+				return d
+			}(),
+		}
+		dialects["sqlite3"] = dialects["sqlite"]
+		return dialects
+	}()
 )
 
 // A dialect knows how to perform SQL dialect specific operations.
