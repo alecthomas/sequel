@@ -23,7 +23,7 @@ var (
 			"([^$*?\"']+)")
 
 	dialects = func() map[string]dialect {
-		dialects := map[string]dialect{
+		out := map[string]dialect{
 			"mysql": func() dialect {
 				d := &mysqlDialect{lastInsertMixin{idIsFirst: true}}
 				d.d = d
@@ -41,8 +41,8 @@ var (
 				return d
 			}(),
 		}
-		dialects["sqlite3"] = dialects["sqlite"]
-		return dialects
+		out["sqlite3"] = out["sqlite"]
+		return out
 	}()
 )
 
