@@ -7,11 +7,28 @@ output:
 linters:
   enable-all: true
   disable:
+    - interfacer
+    - golint
+    - scopelint
     - maligned
     - lll
     - gochecknoglobals
     - godox
     - funlen
+    - wsl
+    - exhaustive
+    - exhaustivestruct
+    - nlreturn
+    - nolintlint
+    - goerr113
+    - paralleltest
+    - gci
+    - gofumpt
+    - cyclop
+    - wrapcheck
+    - nilerr
+    - sqlclosecheck
+    - testpackage
 
 linters-settings:
   govet:
